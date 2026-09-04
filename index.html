@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#F5F6F2">
+<title>まいにち暗記</title>
+<style>
+  :root {
+    --bg: #F5F6F2;
+    --ink: #1F2A2E;
+    --muted: #6B767C;
+    --line: #DDE2DC;
+    --blue: #2B5FA3;
+    --green: #2E7D5B;
+    --red: #C4453A;
+    --eng: #2E7D5B;
+    --esk: #B8741A;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 18px; line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 28px 20px 40px; }
+
+  .greet { font-size: 15px; color: var(--muted); margin-bottom: 6px; }
+  .count { font-size: 15px; color: var(--muted); margin-bottom: 22px; }
+
+  .kind { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+  .kind.eng { color: var(--eng); }
+  .kind.esk { color: var(--esk); }
+
+  .q { font-size: 26px; font-weight: 700; line-height: 1.4; margin: 0 0 22px; }
+  .a { font-size: 22px; font-weight: 700; color: var(--green); margin: 0 0 12px; }
+  .exp {
+    font-size: 16px; color: #3E4A4F; white-space: pre-line;
+    border-left: 4px solid var(--line); padding-left: 14px; margin-bottom: 26px;
+  }
+
+  textarea {
+    width: 100%; min-height: 84px; padding: 14px;
+    font-size: 18px; font-family: inherit; line-height: 1.5;
+    border: 2px solid var(--line); border-radius: 12px;
+    background: #fff; color: var(--ink); resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--blue); }
+
+  button {
+    display: block; width: 100%; padding: 18px;
+    font-size: 19px; font-weight: 700; font-family: inherit;
+    color: #fff; background: var(--blue);
+    border: 0; border-radius: 14px; margin-top: 16px;
+    cursor: pointer;
+  }
+  button:active { opacity: .85; }
+  .two { display: flex; gap: 12px; }
+  .two button { margin-top: 16px; }
+  .ok { background: var(--green); }
+  .ng { background: var(--red); }
+
+  .done { text-align: center; padding: 60px 0 30px; }
+  .done .big { font-size: 28px; font-weight: 700; margin-bottom: 10px; }
+  .done .small { color: var(--muted); }
+
+  .foot { margin-top: 48px; text-align: center; font-size: 14px; color: var(--muted); }
+  .foot a { color: var(--muted); margin: 0 10px; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <div id="app"></div>
+  <div class="foot">
+    <a href="#" onclick="switchMode();return false;" id="swLink">切り替え</a>
+    <a href="#" onclick="backup();return false;">バックアップ</a>
+    <a href="#" onclick="restore();return false;">復元</a>
+  </div>
+</main>
+
+<script>
+/* ==================================================
+   データの持ち方
+   cards.json  … 365日分の問題（GitHubに置く。変えない）
+   localStorage … 進みぐあい（このスマホの中だけ）
+   ================================================== */
+var KEY = "mainichi_anki_v1";
+var INTERVALS = [1, 3, 7, 14, 30];   // 正解するたび次の出題までの日数がのびる
+
+var ALL = [];        // cards.json の中身
+var S = null;        // 進捗
+var MODE = "night";
+var LIST = [];
+var IDX = 0;
+
+function todayStr() {
+  var d = new Date();
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+function pad(n) { return (n < 10 ? "0" : "") + n; }
+function addDays(n) {
+  var d = new Date(); d.setDate(d.getDate() + n);
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+function esc(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function kindName(k) { return k === "esk" ? "AIのべんきょう" : "えいご"; }
+
+function loadState() {
+  try {
+    var raw = localStorage.getItem(KEY);
+    S = raw ? JSON.parse(raw) : null;
+  } catch (e) { S = null; }
+  if (!S) S = { day: 1, lastNight: "", cards: {}, log: [] };
+}
+function saveState() {
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+}
+function cardId(c, i) { return c.day + "-" + i; }
+
+/* ---------- 起動 ---------- */
+fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
+  ALL = d;
+  for (var i = 0; i < ALL.length; i++) ALL[i]._id = cardId(ALL[i], i);
+  loadState();
+  var h = new Date().getHours();
+  MODE = (h >= 18 || h < 4) ? "night" : "morning";
+  render();
+}).catch(function () {
+  document.getElementById("app").innerHTML =
+    '<div class="done"><div class="big">読み込めません</div>' +
+    '<div class="small">cards.json が同じ場所にあるか確認してください。<br>スマホなら GitHub Pages のURLで開いてください。</div></div>';
+});
+
+function switchMode() {
+  MODE = (MODE === "night") ? "morning" : "night";
+  render();
+}
+
+function render() {
+  IDX = 0;
+  if (MODE === "night") {
+    LIST = ALL.filter(function (c) { return c.day === S.day; });
+    renderNight();
+  } else {
+    var t = todayStr();
+    LIST = ALL.filter(function (c) {
+      var st = S.cards[c._id];
+      return st && st.due && st.due <= t;
+    });
+    renderMorning();
+  }
+  document.getElementById("swLink").textContent =
+    (MODE === "night") ? "朝のテストをする" : "夜の分を見る";
+}
+
+/* ---------- 夜：おぼえる ---------- */
+function renderNight() {
+  var app = document.getElementById("app");
+  if (S.lastNight === todayStr()) {
+    app.innerHTML = '<div class="done"><div class="big">今夜はおわり</div>' +
+      '<div class="small">明日の朝、テストがあります。</div></div>' +
+      '<button onclick="reviewTonight()">もう一度見る</button>';
+    return;
+  }
+  if (LIST.length === 0) {
+    app.innerHTML = '<div class="done"><div class="big">カードがありません</div>' +
+      '<div class="small">' + S.day + '日目のカードが cards.json に入っていません。</div></div>';
+    return;
+  }
+  showNightCard();
+}
+
+function reviewTonight() {
+  S.lastNight = "";
+  render();
+}
+
+function showNightCard() {
+  var app = document.getElementById("app");
+  if (IDX >= LIST.length) {
+    for (var i = 0; i < LIST.length; i++) {
+      S.cards[LIST[i]._id] = { box: 0, due: addDays(1) };
+    }
+    S.lastNight = todayStr();
+    S.day = S.day + 1;
+    saveState();
+    app.innerHTML = '<div class="done"><div class="big">おぼえた！</div>' +
+      '<div class="small">明日の朝、この' + LIST.length + '枚が出ます。<br>おやすみなさい。</div></div>';
+    return;
+  }
+  var c = LIST[IDX];
+  var h = '<div class="greet">こんばんは。今夜の ' + (IDX + 1) + ' 枚目 / ' + LIST.length + ' 枚</div>';
+  h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<div class="a">' + esc(c.answer) + '</div>';
+  if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += '<button onclick="IDX++;showNightCard()">' +
+       (IDX + 1 < LIST.length ? "つぎへ" : "おぼえた") + '</button>';
+  app.innerHTML = h;
+  window.scrollTo(0, 0);
+}
+
+/* ---------- 朝：こたえる ---------- */
+function renderMorning() {
+  var app = document.getElementById("app");
+  if (LIST.length === 0) {
+    app.innerHTML = '<div class="done"><div class="big">今朝の問題はありません</div>' +
+      '<div class="small">夜にカードを見ると、翌朝ここに出ます。</div></div>';
+    return;
+  }
+  showQuestion();
+}
+
+function showQuestion() {
+  var app = document.getElementById("app");
+  if (IDX >= LIST.length) {
+    app.innerHTML = '<div class="done"><div class="big">おつかれさま！</div>' +
+      '<div class="small">今朝の ' + LIST.length + ' 問、おわりました。</div></div>';
+    return;
+  }
+  var c = LIST[IDX];
+  var h = '<div class="greet">おはよう。' + (IDX + 1) + ' 問目 / ' + LIST.length + ' 問</div>';
+  h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<textarea id="typed" placeholder="思い出して書く"></textarea>';
+  h += '<button id="revealBtn" onclick="reveal()">こたえを見る</button>';
+  h += '<div id="ans" class="hide">';
+  h += '<div class="a" style="margin-top:22px">' + esc(c.answer) + '</div>';
+  if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += '<div class="two">';
+  h += '<button class="ng" onclick="grade(0)">× 言えなかった</button>';
+  h += '<button class="ok" onclick="grade(1)">○ 言えた</button>';
+  h += '</div></div>';
+  app.innerHTML = h;
+  window.scrollTo(0, 0);
+}
+
+function reveal() {
+  document.getElementById("ans").className = "";
+  document.getElementById("revealBtn").className = "hide";
+}
+
+function grade(ok) {
+  var c = LIST[IDX];
+  var st = S.cards[c._id] || { box: 0, due: "" };
+  st.box = ok ? Math.min(st.box + 1, INTERVALS.length - 1) : 0;
+  st.due = addDays(INTERVALS[st.box]);
+  S.cards[c._id] = st;
+  S.log.push({ id: c._id, day: todayStr(), ok: ok,
+               typed: document.getElementById("typed").value });
+  saveState();
+  IDX++;
+  showQuestion();
+}
+
+/* ---------- バックアップ ---------- */
+function backup() {
+  var blob = new Blob([JSON.stringify(S, null, 2)], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "anki_backup_" + todayStr() + ".json";
+  a.click();
+}
+function restore() {
+  var inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".json";
+  inp.onchange = function () {
+    var f = inp.files[0]; if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      try { S = JSON.parse(r.result); saveState(); render(); alert("復元しました"); }
+      catch (e) { alert("読み込めませんでした"); }
+    };
+    r.readAsText(f);
+  };
+  inp.click();
+}
+</script>
+</body>
+</html>
