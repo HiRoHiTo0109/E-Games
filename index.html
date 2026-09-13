@@ -24,17 +24,19 @@
     font-size: 18px; line-height: 1.6;
     -webkit-text-size-adjust: 100%;
   }
-  main { max-width: 480px; margin: 0 auto; padding: 24px 20px 40px; }
+  main { max-width: 480px; margin: 0 auto; padding: 20px 20px 40px; }
 
-  .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+  .tabs:last-of-type { margin-bottom: 20px; }
   .tabs button {
-    flex: 1; padding: 14px 0; font-size: 17px; font-weight: 700;
+    flex: 1; padding: 13px 0; font-size: 16px; font-weight: 700;
     border: 2px solid var(--line); border-radius: 12px;
     background: #fff; color: var(--muted); font-family: inherit;
   }
   .tabs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
 
   .greet { font-size: 15px; color: var(--muted); margin-bottom: 6px; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 18px; text-align: center; line-height: 1.8; }
 
   .kind { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
   .kind.eng { color: var(--eng); }
@@ -44,7 +46,7 @@
   .a { font-size: 22px; font-weight: 700; color: var(--green); margin: 0 0 12px; }
   .exp {
     font-size: 16px; color: #3E4A4F; white-space: pre-line;
-    border-left: 4px solid var(--line); padding-left: 14px; margin-bottom: 26px;
+    border-left: 4px solid var(--line); padding-left: 14px; margin-bottom: 8px;
   }
 
   textarea {
@@ -59,21 +61,31 @@
     display: block; width: 100%; padding: 18px;
     font-size: 19px; font-weight: 700; font-family: inherit;
     color: #fff; background: var(--blue);
-    border: 0; border-radius: 14px; margin-top: 16px;
+    border: 0; border-radius: 14px; margin-top: 14px;
     cursor: pointer;
   }
   button.act:active { opacity: .85; }
   .two { display: flex; gap: 12px; }
-  .two button.act { margin-top: 16px; }
   .ok { background: var(--green); }
   .ng { background: var(--red); }
   .sub { background: #fff; color: var(--blue); border: 2px solid var(--line); }
 
-  .done { text-align: center; padding: 50px 0 24px; }
+  .picker { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .picker button {
+    width: 52px; padding: 12px 0; font-size: 18px; font-weight: 700;
+    border: 2px solid var(--line); border-radius: 12px;
+    background: #fff; color: var(--blue); font-family: inherit;
+  }
+  .picker .cur {
+    flex: 1; text-align: center; font-size: 18px; font-weight: 700;
+    padding: 12px 0; border: 2px solid var(--line); border-radius: 12px; background: #fff;
+  }
+
+  .done { text-align: center; padding: 44px 0 22px; }
   .done .big { font-size: 27px; font-weight: 700; margin-bottom: 10px; }
   .done .small { color: var(--muted); }
 
-  .foot { margin-top: 44px; text-align: center; font-size: 14px; color: var(--muted); }
+  .foot { margin-top: 38px; text-align: center; font-size: 14px; color: var(--muted); }
   .foot a { color: var(--muted); margin: 0 8px; white-space: nowrap; }
   .hide { display: none; }
 </style>
@@ -82,11 +94,15 @@
 <main>
   <div class="tabs">
     <button id="tabNight" onclick="setMode('night')">夜：おぼえる</button>
-    <button id="tabMorning" onclick="setMode('morning')">朝：こたえる</button>
+    <button id="tabMorning" onclick="setMode('morning')">朝：3問</button>
+  </div>
+  <div class="tabs">
+    <button id="tabReview" onclick="setMode('review')">復習</button>
+    <button id="tabPast" onclick="setMode('past')">過去問</button>
   </div>
   <div id="app"></div>
   <div class="foot">
-    <a href="#" onclick="pickDay();return false;">日付を指定</a>
+    <a href="#" onclick="fixDay();return false;">進み具合を直す</a>
     <a href="#" onclick="backup();return false;">バックアップ</a>
     <a href="#" onclick="restore();return false;">復元</a>
   </div>
@@ -96,25 +112,30 @@
 /* ==================================================
    cards.json  … 365日分の問題（GitHubに置く。変えない）
    localStorage … 進みぐあい（このスマホの中だけ）
+
+   4つの画面:
+     night   その日の3枚を覚える。1日1回だけ。終えると翌日へ進む
+     morning 前の夜に覚えた3枚だけを出題。×は復習箱へ入る
+     review  復習箱にたまった問題。○を出すと箱から消える
+     past    好きな日の問題を見る。こたえと説明を別々に開ける
    ================================================== */
 var KEY = "mainichi_anki_v1";
-var INTERVALS = [1, 3, 7, 14, 30];   // 正解するたび次の出題までの日数がのびる
 
 var ALL = [];
 var S = null;
 var MODE = "night";
 var LIST = [];
 var IDX = 0;
-var OVERRIDE_DAY = null;   // 日付を指定してやり直すとき
-var JUST_LEARNED = [];     // 直前に「おぼえた」を押した3枚（今すぐテスト用）
+var MAXDAY = 1;
+var PAST_DAY = 1;
+var JUST_LEARNED = [];
 
 /* ---------- 日付：午前4時を1日の区切りにする ----------
    深夜0〜4時に操作しても「前の日の夜」として扱うため、
-   何時に開いても出題日がズレません。 */
-function studyDate(offset) {
+   何時に開いてもズレません。 */
+function studyDate() {
   var d = new Date();
   if (d.getHours() < 4) d.setDate(d.getDate() - 1);
-  if (offset) d.setDate(d.getDate() + offset);
   return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
 }
 function pad(n) { return (n < 10 ? "0" : "") + n; }
@@ -122,32 +143,41 @@ function esc(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function kindName(k) { return k === "esk" ? "AIのべんきょう" : "えいご"; }
+function byId(id) {
+  for (var i = 0; i < ALL.length; i++) if (ALL[i]._id === id) return ALL[i];
+  return null;
+}
+function cardsOfDay(n) {
+  return ALL.filter(function (c) { return c.day === n; });
+}
 
 function loadState() {
   try {
     var raw = localStorage.getItem(KEY);
     S = raw ? JSON.parse(raw) : null;
   } catch (e) { S = null; }
-  if (!S) S = { day: 1, lastNight: "", cards: {}, log: [] };
+  if (!S) S = {};
+  if (typeof S.day !== "number") S.day = 1;
+  if (typeof S.lastNight !== "string") S.lastNight = "";
+  if (!S.pending) S.pending = [];   // 翌朝に出す3枚のid
+  if (!S.review) S.review = [];     // 間違えた問題のid（復習箱）
+  if (!S.log) S.log = [];
+  if (S.cards) delete S.cards;      // 旧バージョンの予約データは使わない
 }
 function saveState() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
-}
-function dueCards() {
-  var t = studyDate(0);
-  return ALL.filter(function (c) {
-    var st = S.cards[c._id];
-    return st && st.due && st.due <= t;
-  });
 }
 
 /* ---------- 起動 ---------- */
 fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
   ALL = d;
-  for (var i = 0; i < ALL.length; i++) ALL[i]._id = ALL[i].day + "-" + i;
+  for (var i = 0; i < ALL.length; i++) {
+    ALL[i]._id = ALL[i].day + "-" + i;
+    if (ALL[i].day > MAXDAY) MAXDAY = ALL[i].day;
+  }
   loadState();
-  /* 時刻ではなく「出題待ちがあるかどうか」でモードを決める */
-  MODE = (dueCards().length > 0) ? "morning" : "night";
+  PAST_DAY = Math.max(1, S.day - 1);
+  MODE = (S.pending.length > 0) ? "morning" : "night";
   render();
 }).catch(function () {
   document.getElementById("app").innerHTML =
@@ -155,63 +185,72 @@ fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
     '<div class="small">cards.json が同じ場所にあるか確認してください。<br>GitHub Pages のURLで開いてください。</div></div>';
 });
 
-function setMode(m) { MODE = m; OVERRIDE_DAY = null; render(); }
+function setMode(m) { MODE = m; IDX = 0; render(); }
 
 function render() {
   IDX = 0;
   document.getElementById("tabNight").className = (MODE === "night") ? "on" : "";
   document.getElementById("tabMorning").className = (MODE === "morning") ? "on" : "";
+  document.getElementById("tabReview").className = (MODE === "review") ? "on" : "";
+  document.getElementById("tabPast").className = (MODE === "past") ? "on" : "";
+  document.getElementById("tabReview").textContent =
+    "復習" + (S.review.length > 0 ? "（" + S.review.length + "）" : "");
+
   if (MODE === "night") {
-    var target = (OVERRIDE_DAY !== null) ? OVERRIDE_DAY : S.day;
-    LIST = ALL.filter(function (c) { return c.day === target; });
+    LIST = cardsOfDay(S.day);
     renderNight();
-  } else {
-    LIST = dueCards();
+  } else if (MODE === "morning") {
+    LIST = [];
+    for (var i = 0; i < S.pending.length; i++) {
+      var c = byId(S.pending[i]); if (c) LIST.push(c);
+    }
     renderMorning();
+  } else if (MODE === "review") {
+    LIST = [];
+    for (var j = 0; j < S.review.length; j++) {
+      var r = byId(S.review[j]); if (r) LIST.push(r);
+    }
+    renderReview();
+  } else {
+    LIST = cardsOfDay(PAST_DAY);
+    renderPast();
   }
 }
 
-/* ---------- 夜：おぼえる ---------- */
+/* ================== 夜：おぼえる ==================
+   1日1回だけ。終えると自動的に翌日へ進みます。 */
 function renderNight() {
   var app = document.getElementById("app");
-  if (OVERRIDE_DAY === null && S.lastNight === studyDate(0)) {
+  if (S.lastNight === studyDate()) {
     app.innerHTML = '<div class="done"><div class="big">今夜はおわり</div>' +
-      '<div class="small">次に「朝：こたえる」を開くと出題されます。</div></div>' +
-      '<button class="act sub" onclick="reviewTonight()">もう一度見る</button>';
+      '<div class="small">今日の分は終わりました。<br>次は明日の夜、' + S.day + '日目を仕込みます。</div></div>' +
+      '<div class="note">前の日の内容を見たいときは「過去問」を、<br>間違えた問題をやり直すときは「復習」をお使いください。</div>';
     return;
   }
   if (LIST.length === 0) {
     app.innerHTML = '<div class="done"><div class="big">カードがありません</div>' +
-      '<div class="small">' + (OVERRIDE_DAY !== null ? OVERRIDE_DAY : S.day) +
-      '日目のカードが cards.json に入っていません。</div></div>';
+      '<div class="small">' + S.day + '日目のカードが cards.json に入っていません。</div></div>';
     return;
   }
   showNightCard();
 }
-function reviewTonight() { S.lastNight = ""; render(); }
 
 function showNightCard() {
   var app = document.getElementById("app");
-  var target = (OVERRIDE_DAY !== null) ? OVERRIDE_DAY : S.day;
   if (IDX >= LIST.length) {
-    for (var i = 0; i < LIST.length; i++) {
-      S.cards[LIST[i]._id] = { box: 0, due: studyDate(1) };
-    }
-    if (OVERRIDE_DAY === null) {
-      S.lastNight = studyDate(0);
-      S.day = S.day + 1;
-    }
+    S.pending = [];
+    for (var i = 0; i < LIST.length; i++) S.pending.push(LIST[i]._id);
+    S.lastNight = studyDate();
+    S.day = S.day + 1;
     saveState();
     JUST_LEARNED = LIST.slice();
-    var n = LIST.length;
-    OVERRIDE_DAY = null;
     app.innerHTML = '<div class="done"><div class="big">おぼえた！</div>' +
-      '<div class="small">明日の朝、この' + n + '枚が出ます。<br>おやすみなさい。</div></div>' +
+      '<div class="small">明日の朝、この' + LIST.length + '枚が出ます。<br>おやすみなさい。</div></div>' +
       '<button class="act sub" onclick="testNow()">今すぐテストする</button>';
     return;
   }
   var c = LIST[IDX];
-  var h = '<div class="greet">' + target + '日目　' + (IDX + 1) + ' 枚目 / ' + LIST.length + ' 枚</div>';
+  var h = '<div class="greet">' + c.day + '日目　' + (IDX + 1) + ' 枚目 / ' + LIST.length + ' 枚</div>';
   h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
   h += '<div class="q">' + esc(c.question) + '</div>';
   h += '<div class="a">' + esc(c.answer) + '</div>';
@@ -222,25 +261,19 @@ function showNightCard() {
   window.scrollTo(0, 0);
 }
 
-/* 「今すぐテスト」：直前に覚えた3枚をその場で出題する。
-   押さなければ通常どおり翌朝の出題になります。 */
 function testNow() {
   if (JUST_LEARNED.length === 0) return;
   MODE = "morning";
-  document.getElementById("tabNight").className = "";
-  document.getElementById("tabMorning").className = "on";
-  LIST = JUST_LEARNED.slice();
-  JUST_LEARNED = [];
-  IDX = 0;
-  showQuestion();
+  render();
 }
 
-/* ---------- 朝：こたえる ---------- */
+/* ================== 朝：3問 ==================
+   前の夜に覚えた3枚だけ。○で終了、×は復習箱へ。 */
 function renderMorning() {
   var app = document.getElementById("app");
   if (LIST.length === 0) {
     app.innerHTML = '<div class="done"><div class="big">今の出題はありません</div>' +
-      '<div class="small">「夜：おぼえる」でカードを覚えると、<br>翌朝ここに出てきます。</div></div>';
+      '<div class="small">「夜：おぼえる」で3枚を覚えると、<br>ここに出てきます。</div></div>';
     return;
   }
   showQuestion();
@@ -249,12 +282,17 @@ function renderMorning() {
 function showQuestion() {
   var app = document.getElementById("app");
   if (IDX >= LIST.length) {
+    S.pending = [];
+    saveState();
+    var msg = (S.review.length > 0)
+      ? '間違えた問題は「復習」にたまっています。<br>今は ' + S.review.length + ' 問です。'
+      : '全問正解です。';
     app.innerHTML = '<div class="done"><div class="big">おつかれさま！</div>' +
-      '<div class="small">' + LIST.length + ' 問、おわりました。</div></div>';
+      '<div class="small">' + msg + '</div></div>';
     return;
   }
   var c = LIST[IDX];
-  var h = '<div class="greet">' + (IDX + 1) + ' 問目 / ' + LIST.length + ' 問</div>';
+  var h = '<div class="greet">' + (IDX + 1) + ' 問目 / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
   h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
   h += '<div class="q">' + esc(c.question) + '</div>';
   h += '<textarea id="typed" placeholder="思い出して書く"></textarea>';
@@ -275,28 +313,167 @@ function reveal() {
 }
 function grade(ok) {
   var c = LIST[IDX];
-  var st = S.cards[c._id] || { box: 0, due: "" };
-  st.box = ok ? Math.min(st.box + 1, INTERVALS.length - 1) : 0;
-  st.due = studyDate(INTERVALS[st.box]);
-  S.cards[c._id] = st;
-  S.log.push({ id: c._id, day: studyDate(0), ok: ok,
+  if (ok) {
+    removeFromReview(c._id);          /* 正解なら復習箱から外す */
+  } else if (S.review.indexOf(c._id) < 0) {
+    S.review.push(c._id);             /* 間違えたら復習箱へ */
+  }
+  S.log.push({ id: c._id, day: studyDate(), ok: ok,
                typed: document.getElementById("typed").value });
   saveState();
   IDX++;
   showQuestion();
 }
+function removeFromReview(id) {
+  var k = S.review.indexOf(id);
+  if (k >= 0) S.review.splice(k, 1);
+}
 
-/* ---------- 日付を指定してやり直す ---------- */
-function pickDay() {
-  var max = 0;
-  for (var i = 0; i < ALL.length; i++) if (ALL[i].day > max) max = ALL[i].day;
-  var input = prompt("何日目のカードを見ますか？（1〜" + max + "）\n今は " + S.day + " 日目です。", S.day);
+/* ================== 復習 ==================
+   間違えた問題だけ。○を出すと箱から消えます。 */
+function renderReview() {
+  var app = document.getElementById("app");
+  if (LIST.length === 0) {
+    app.innerHTML = '<div class="done"><div class="big">復習はありません</div>' +
+      '<div class="small">間違えた問題がここにたまります。<br>正解すると消えます。</div></div>';
+    return;
+  }
+  showReviewCard();
+}
+function showReviewCard() {
+  var app = document.getElementById("app");
+  if (IDX >= LIST.length) {
+    app.innerHTML = '<div class="done"><div class="big">ひととおり終わりました</div>' +
+      '<div class="small">残り ' + S.review.length + ' 問です。</div></div>' +
+      (S.review.length > 0
+        ? '<button class="act sub" onclick="setMode(\'review\')">もう一度やる</button>' : '');
+    return;
+  }
+  var c = LIST[IDX];
+  var h = '<div class="greet">復習 ' + (IDX + 1) + ' / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
+  h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<textarea id="rvtyped" placeholder="思い出して書く"></textarea>';
+  h += '<button class="act" id="rvBtn" onclick="revealRv()">こたえを見る</button>';
+  h += '<div id="rvans" class="hide">';
+  h += '<div class="a" style="margin-top:22px">' + esc(c.answer) + '</div>';
+  if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += '<div class="two">';
+  h += '<button class="act ng" onclick="gradeRv(0)">× まだダメ</button>';
+  h += '<button class="act ok" onclick="gradeRv(1)">○ 言えた</button>';
+  h += '</div></div>';
+  app.innerHTML = h;
+  window.scrollTo(0, 0);
+}
+function revealRv() {
+  document.getElementById("rvans").className = "";
+  document.getElementById("rvBtn").className = "act hide";
+}
+function gradeRv(ok) {
+  var c = LIST[IDX];
+  if (ok) removeFromReview(c._id);   /* 正解 → 復習箱から消える */
+  S.log.push({ id: c._id, day: studyDate(), ok: ok, rv: 1,
+               typed: document.getElementById("rvtyped").value });
+  saveState();
+  document.getElementById("tabReview").textContent =
+    "復習" + (S.review.length > 0 ? "（" + S.review.length + "）" : "");
+  IDX++;
+  showReviewCard();
+}
+
+/* ================== 過去問 ==================
+   好きな日を選んで見る。こたえと説明は別々に開けます。
+   ここでの操作は進み具合に影響しません。 */
+function renderPast() {
+  var app = document.getElementById("app");
+  var h = '<div class="picker">';
+  h += '<button onclick="movePast(-1)">◀</button>';
+  h += '<div class="cur" onclick="jumpPast()">' + PAST_DAY + ' 日目</div>';
+  h += '<button onclick="movePast(1)">▶</button>';
+  h += '</div><div id="pv"></div>';
+  h += '<div class="note">数字を押すと日付を直接えらべます。<br>過去問は進み具合に影響しません。</div>';
+  app.innerHTML = h;
+  IDX = 0;
+  showPastCard();
+}
+function movePast(d) {
+  var n = PAST_DAY + d;
+  if (n < 1 || n > MAXDAY) return;
+  PAST_DAY = n; render();
+}
+function jumpPast() {
+  var input = prompt("何日目を見ますか？（1〜" + MAXDAY + "）", PAST_DAY);
   if (input === null) return;
   var n = parseInt(input, 10);
-  if (isNaN(n) || n < 1 || n > max) { alert("1〜" + max + " の数字を入れてください。"); return; }
-  OVERRIDE_DAY = n;
+  if (isNaN(n) || n < 1 || n > MAXDAY) { alert("1〜" + MAXDAY + " の数字を入れてください。"); return; }
+  PAST_DAY = n; render();
+}
+function showPastCard() {
+  var pv = document.getElementById("pv");
+  if (!pv) return;
+  if (LIST.length === 0) {
+    pv.innerHTML = '<div class="done"><div class="small">この日のカードはありません。</div></div>';
+    return;
+  }
+  if (IDX >= LIST.length) {
+    pv.innerHTML = '<div class="done"><div class="big">この日はおわり</div>' +
+      '<div class="small">◀ ▶ で別の日に移れます。</div></div>' +
+      '<button class="act sub" onclick="IDX=0;showPastCard()">もう一度見る</button>';
+    return;
+  }
+  var c = LIST[IDX];
+  var inBox = (S.review.indexOf(c._id) >= 0);
+  var h = '<div class="greet">' + (IDX + 1) + ' 枚目 / ' + LIST.length + ' 枚</div>';
+  h += '<div class="kind ' + c.kind + '">' + kindName(c.kind) + '</div>';
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<textarea id="ptyped" placeholder="思い出して書く"></textarea>';
+  h += '<div class="two">';
+  h += '<button class="act sub" id="pAnsBtn" onclick="showPart(\'pAns\')">こたえを見る</button>';
+  h += '<button class="act sub" id="pExpBtn" onclick="showPart(\'pExp\')">説明を見る</button>';
+  h += '</div>';
+  h += '<div id="pAns" class="hide"><div class="a" style="margin-top:18px">' + esc(c.answer) + '</div></div>';
+  h += '<div id="pExp" class="hide"><div class="exp" style="margin-top:14px">' + esc(c.explanation || "") + '</div></div>';
+  h += '<button class="act sub" id="pBoxBtn" onclick="toggleBox(\'' + c._id + '\')">' +
+       (inBox ? "復習からはずす" : "復習に入れる") + '</button>';
+  h += '<button class="act" onclick="IDX++;showPastCard()">' +
+       (IDX + 1 < LIST.length ? "つぎへ" : "おわり") + '</button>';
+  pv.innerHTML = h;
+  window.scrollTo(0, 0);
+}
+function showPart(id) {
+  document.getElementById(id).className = "";
+  var b = document.getElementById(id + "Btn");
+  if (b) b.className = "act sub hide";
+}
+/* 過去問から復習箱へ出し入れする。正解済みの問題も自由に戻せます。 */
+function toggleBox(id) {
+  var k = S.review.indexOf(id);
+  if (k >= 0) S.review.splice(k, 1); else S.review.push(id);
+  saveState();
+  var b = document.getElementById("pBoxBtn");
+  if (b) b.textContent = (k >= 0) ? "復習に入れる" : "復習からはずす";
+  document.getElementById("tabReview").textContent =
+    "復習" + (S.review.length > 0 ? "（" + S.review.length + "）" : "");
+}
+
+/* ================== 進み具合を直す ================== */
+function fixDay() {
+  var input = prompt(
+    "次に覚える日を指定します（1〜" + MAXDAY + "）。\n" +
+    "今は " + S.day + " 日目の予定です。",
+    S.day);
+  if (input === null) return;
+  var n = parseInt(input, 10);
+  if (isNaN(n) || n < 1 || n > MAXDAY) { alert("1〜" + MAXDAY + " の数字を入れてください。"); return; }
+  if (!confirm(n + " 日目から再開します。よろしいですか？\n（復習箱の中身はそのまま残ります）")) return;
+  S.day = n;
+  S.lastNight = "";
+  S.pending = [];
+  PAST_DAY = Math.max(1, n - 1);
+  saveState();
   MODE = "night";
   render();
+  alert(n + " 日目から再開できます。");
 }
 
 /* ---------- バックアップ ---------- */
@@ -304,7 +481,7 @@ function backup() {
   var blob = new Blob([JSON.stringify(S, null, 2)], { type: "application/json" });
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "anki_backup_" + studyDate(0) + ".json";
+  a.download = "anki_backup_" + studyDate() + ".json";
   a.click();
 }
 function restore() {
@@ -314,8 +491,14 @@ function restore() {
     var f = inp.files[0]; if (!f) return;
     var r = new FileReader();
     r.onload = function () {
-      try { S = JSON.parse(r.result); saveState(); render(); alert("復元しました"); }
-      catch (e) { alert("読み込めませんでした"); }
+      try {
+        S = JSON.parse(r.result);
+        if (!S.pending) S.pending = [];
+        if (!S.review) S.review = [];
+        saveState();
+        PAST_DAY = Math.max(1, S.day - 1);
+        render(); alert("復元しました");
+      } catch (e) { alert("読み込めませんでした"); }
     };
     r.readAsText(f);
   };
