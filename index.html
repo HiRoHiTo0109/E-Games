@@ -88,6 +88,34 @@
   .foot { margin-top: 36px; text-align: center; font-size: 14px; color: var(--muted); }
   .foot a { color: var(--muted); margin: 0 8px; white-space: nowrap; }
   .hide { display: none; }
+
+  /* ===== 並べ替え・4択（Duolingo風） ===== */
+  .q.long { font-size: 19px; line-height: 1.6; }
+  .slot {
+    display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start;
+    min-height: 62px; padding: 8px 0; margin-bottom: 18px;
+    border-bottom: 2px solid var(--line);
+  }
+  .bank { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 4px; }
+  .tile {
+    padding: 9px 14px; font-size: 18px; font-family: inherit; color: var(--ink);
+    background: #fff; border: 2px solid var(--line); border-bottom-width: 4px; border-radius: 12px;
+  }
+  .tile.used { background: var(--line); color: transparent; border-color: var(--line); }
+  .opt {
+    display: block; width: 100%; text-align: left; padding: 15px 16px; margin-bottom: 10px;
+    font-size: 17px; font-family: inherit; line-height: 1.4; color: var(--ink);
+    background: #fff; border: 2px solid var(--line); border-bottom-width: 4px; border-radius: 12px;
+  }
+  .opt.right { border-color: var(--green); background: #E6F2EC; }
+  .opt.wrong { border-color: var(--red); background: #F8E7E5; }
+  .res { margin-top: 18px; padding: 14px 16px; border-radius: 12px; }
+  .res.good { background: #E6F2EC; }
+  .res.bad  { background: #F8E7E5; }
+  .res .mark { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
+  .res.good .mark { color: var(--green); }
+  .res.bad  .mark { color: var(--red); }
+  button.act:disabled { opacity: .4; }
 </style>
 </head>
 <body>
@@ -146,6 +174,119 @@ function byId(id) {
 }
 function cardsOfDay(n) {
   return ALL.filter(function (c) { return c.track === S.track && c.day === n; });
+}
+
+/* ============ 並べ替え・4択（Duolingo風） ============
+   type なし     … 今まで通り（書いて自己採点）
+   type:"order"    … 日→英 並べ替え（answerを自動で単語に分ける）
+   type:"order_ja" … 英→日 並べ替え（piecesで区切りを指定）
+   type:"choice"   … 4択（choices と correct=正解の番号 0〜3）
+   ========================================================= */
+var QZ = null;
+var PUNC = /[.,!?。、！？]/g;
+function isQuiz(c) { return c.type === "order" || c.type === "order_ja" || c.type === "choice"; }
+function shuffle(a) {
+  a = a.slice();
+  for (var i = a.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+function cleanWord(w) { return String(w || "").replace(PUNC, "").trim(); }
+function joinSep(c) { return (c.type === "order_ja") ? "" : " "; }
+function rightPieces(c) {
+  var p = (c.pieces && c.pieces.length) ? c.pieces : String(c.answer || "").split(/\s+/);
+  return p.map(cleanWord).filter(function (w) { return w; });
+}
+function norm(c, s) {
+  s = String(s || "").toLowerCase().replace(PUNC, "");
+  return (c.type === "order_ja") ? s.replace(/\s+/g, "") : s.replace(/\s+/g, " ").trim();
+}
+/* 答えの文字（answerが無いカードでも表示できるように） */
+function answerText(c) {
+  if (c.answer) return c.answer;
+  if (c.type === "choice" && c.choices) return c.choices[c.correct] || "";
+  if (c.pieces) return c.pieces.join(joinSep(c));
+  return "";
+}
+
+function quizHtml(c, ctx) {
+  QZ = { c: c, ctx: ctx, picked: [], done: false, chosen: -1 };
+  if (c.type === "choice") {
+    QZ.opts = shuffle((c.choices || []).map(function (t, i) { return { t: t, i: i }; }));
+  } else {
+    QZ.tiles = shuffle(rightPieces(c).concat((c.dummy || []).map(cleanWord)
+                 .filter(function (w) { return w; })));
+  }
+  return '<div class="q' + (c.type === "choice" ? ' long' : '') + '">' + esc(c.question) + '</div>' +
+         '<div id="qzBody"></div><div id="qzRes"></div>';
+}
+function drawQuiz() {
+  var c = QZ.c, h = "", k;
+  if (c.type === "choice") {
+    for (k = 0; k < QZ.opts.length; k++) {
+      var cls = "opt";
+      if (QZ.done) {
+        if (QZ.opts[k].i === c.correct) cls += " right";
+        else if (k === QZ.chosen) cls += " wrong";
+      }
+      h += '<button class="' + cls + '" onclick="pickOpt(' + k + ')">' + esc(QZ.opts[k].t) + '</button>';
+    }
+  } else {
+    h += '<div class="slot">';
+    for (k = 0; k < QZ.picked.length; k++) {
+      h += '<button class="tile" onclick="unpick(' + k + ')">' + esc(QZ.tiles[QZ.picked[k]]) + '</button>';
+    }
+    h += '</div><div class="bank">';
+    for (k = 0; k < QZ.tiles.length; k++) {
+      var used = QZ.picked.indexOf(k) >= 0;
+      h += '<button class="tile' + (used ? ' used' : '') + '" onclick="pickTile(' + k + ')">' +
+           esc(QZ.tiles[k]) + '</button>';
+    }
+    h += '</div>';
+    if (!QZ.done) {
+      h += '<button class="act" onclick="checkOrder()"' + (QZ.picked.length ? '' : ' disabled') +
+           '>こたえ合わせ</button>';
+    }
+  }
+  document.getElementById("qzBody").innerHTML = h;
+}
+function pickTile(k) {
+  if (QZ.done || QZ.picked.indexOf(k) >= 0) return;
+  QZ.picked.push(k); drawQuiz();
+}
+function unpick(k) {
+  if (QZ.done) return;
+  QZ.picked.splice(k, 1); drawQuiz();
+}
+function checkOrder() {
+  var c = QZ.c;
+  var typed = QZ.picked.map(function (k) { return QZ.tiles[k]; }).join(joinSep(c));
+  var ok = (norm(c, typed) === norm(c, rightPieces(c).join(joinSep(c))));
+  var alts = c.alts || [];
+  for (var i = 0; i < alts.length && !ok; i++) if (norm(c, typed) === norm(c, alts[i])) ok = true;
+  showResult(ok ? 1 : 0, typed);
+}
+function pickOpt(k) {
+  if (QZ.done) return;
+  QZ.chosen = k;
+  showResult(QZ.opts[k].i === QZ.c.correct ? 1 : 0, QZ.opts[k].t);
+}
+function showResult(ok, typed) {
+  var c = QZ.c;
+  QZ.done = true; QZ.ok = ok; QZ.typed = typed;
+  drawQuiz();
+  var h = '<div class="res ' + (ok ? 'good' : 'bad') + '">';
+  h += '<div class="mark">' + (ok ? '○ 正解！' : '× ざんねん') + '</div>';
+  if (!ok || c.type !== "choice") h += '<div class="a" style="margin:0 0 6px">' + esc(answerText(c)) + '</div>';
+  if (c.explanation) h += '<div class="exp" style="margin:0">' + esc(c.explanation) + '</div>';
+  h += '</div>';
+  if (QZ.ctx !== "p") h += '<button class="act" onclick="finishQuiz()">つぎへ</button>';
+  document.getElementById("qzRes").innerHTML = h;
+}
+function finishQuiz() {
+  if (QZ.ctx === "m") grade(QZ.ok, QZ.typed);
+  else if (QZ.ctx === "r") gradeRv(QZ.ok, QZ.typed);
 }
 
 function emptyTrack() { return { day: 1, lastNight: "", pending: [], review: [], log: [] }; }
@@ -262,8 +403,8 @@ function showNightCard() {
   var c = LIST[IDX];
   var h = '<div class="greet">' + TRACK_NAME[S.track] + '　' + c.day + '日目　' +
           (IDX + 1) + ' / ' + LIST.length + ' 枚</div>';
-  h += '<div class="q">' + esc(c.question) + '</div>';
-  h += '<div class="a">' + esc(c.answer) + '</div>';
+  h += '<div class="q' + (c.type === "choice" ? ' long' : '') + '">' + esc(c.question) + '</div>';
+  h += '<div class="a">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
   h += '<button class="act" onclick="IDX++;showNightCard()">' +
        (IDX + 1 < LIST.length ? "つぎへ" : "おぼえた") + '</button>';
@@ -295,11 +436,14 @@ function showQuestion() {
   }
   var c = LIST[IDX];
   var h = '<div class="greet">' + (IDX + 1) + ' 問目 / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
+  if (isQuiz(c)) {
+    app.innerHTML = h + quizHtml(c, "m"); drawQuiz(); window.scrollTo(0, 0); return;
+  }
   h += '<div class="q">' + esc(c.question) + '</div>';
   h += '<textarea id="typed" placeholder="思い出して書く"></textarea>';
   h += '<button class="act" id="revealBtn" onclick="reveal()">こたえを見る</button>';
   h += '<div id="ans" class="hide">';
-  h += '<div class="a" style="margin-top:22px">' + esc(c.answer) + '</div>';
+  h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
   h += '<div class="two">';
   h += '<button class="act ng" onclick="grade(0)">× 言えなかった</button>';
@@ -312,12 +456,12 @@ function reveal() {
   document.getElementById("ans").className = "";
   document.getElementById("revealBtn").className = "act hide";
 }
-function grade(ok) {
+function grade(ok, typed) {
   var c = LIST[IDX];
+  if (typed === undefined) typed = document.getElementById("typed").value;
   if (ok) removeFromReview(c._id);
   else if (T.review.indexOf(c._id) < 0) T.review.push(c._id);
-  T.log.push({ id: c._id, day: studyDate(), ok: ok,
-               typed: document.getElementById("typed").value });
+  T.log.push({ id: c._id, day: studyDate(), ok: ok, typed: typed });
   saveState(); IDX++; showQuestion();
 }
 function removeFromReview(id) {
@@ -345,11 +489,14 @@ function showReviewCard() {
   }
   var c = LIST[IDX];
   var h = '<div class="greet">復習 ' + (IDX + 1) + ' / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
+  if (isQuiz(c)) {
+    app.innerHTML = h + quizHtml(c, "r"); drawQuiz(); window.scrollTo(0, 0); return;
+  }
   h += '<div class="q">' + esc(c.question) + '</div>';
   h += '<textarea id="rvtyped" placeholder="思い出して書く"></textarea>';
   h += '<button class="act" id="rvBtn" onclick="revealRv()">こたえを見る</button>';
   h += '<div id="rvans" class="hide">';
-  h += '<div class="a" style="margin-top:22px">' + esc(c.answer) + '</div>';
+  h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
   h += '<div class="two">';
   h += '<button class="act ng" onclick="gradeRv(0)">× まだダメ</button>';
@@ -362,11 +509,11 @@ function revealRv() {
   document.getElementById("rvans").className = "";
   document.getElementById("rvBtn").className = "act hide";
 }
-function gradeRv(ok) {
+function gradeRv(ok, typed) {
   var c = LIST[IDX];
+  if (typed === undefined) typed = document.getElementById("rvtyped").value;
   if (ok) removeFromReview(c._id);
-  T.log.push({ id: c._id, day: studyDate(), ok: ok, rv: 1,
-               typed: document.getElementById("rvtyped").value });
+  T.log.push({ id: c._id, day: studyDate(), ok: ok, rv: 1, typed: typed });
   saveState();
   document.getElementById("tabReview").textContent =
     "復習" + (T.review.length > 0 ? "（" + T.review.length + "）" : "");
@@ -414,19 +561,25 @@ function showPastCard() {
   var c = LIST[IDX];
   var inBox = (T.review.indexOf(c._id) >= 0);
   var h = '<div class="greet">' + (IDX + 1) + ' 枚目 / ' + LIST.length + ' 枚</div>';
-  h += '<div class="q">' + esc(c.question) + '</div>';
-  h += '<textarea id="ptyped" placeholder="思い出して書く"></textarea>';
-  h += '<div class="two">';
-  h += '<button class="act sub" id="pAnsBtn" onclick="showPart(\'pAns\')">こたえを見る</button>';
-  h += '<button class="act sub" id="pExpBtn" onclick="showPart(\'pExp\')">説明を見る</button>';
-  h += '</div>';
-  h += '<div id="pAns" class="hide"><div class="a" style="margin-top:18px">' + esc(c.answer) + '</div></div>';
-  h += '<div id="pExp" class="hide"><div class="exp" style="margin-top:14px">' + esc(c.explanation || "") + '</div></div>';
+  var quiz = isQuiz(c);
+  if (quiz) {
+    h += quizHtml(c, "p");
+  } else {
+    h += '<div class="q">' + esc(c.question) + '</div>';
+    h += '<textarea id="ptyped" placeholder="思い出して書く"></textarea>';
+    h += '<div class="two">';
+    h += '<button class="act sub" id="pAnsBtn" onclick="showPart(\'pAns\')">こたえを見る</button>';
+    h += '<button class="act sub" id="pExpBtn" onclick="showPart(\'pExp\')">説明を見る</button>';
+    h += '</div>';
+    h += '<div id="pAns" class="hide"><div class="a" style="margin-top:18px">' + esc(answerText(c)) + '</div></div>';
+    h += '<div id="pExp" class="hide"><div class="exp" style="margin-top:14px">' + esc(c.explanation || "") + '</div></div>';
+  }
   h += '<button class="act sub" id="pBoxBtn" onclick="toggleBox(\'' + c._id + '\')">' +
        (inBox ? "復習からはずす" : "復習に入れる") + '</button>';
   h += '<button class="act" onclick="IDX++;showPastCard()">' +
        (IDX + 1 < LIST.length ? "つぎへ" : "おわり") + '</button>';
   pv.innerHTML = h;
+  if (quiz) drawQuiz();
   window.scrollTo(0, 0);
 }
 function showPart(id) {
