@@ -9,7 +9,7 @@
   :root {
     --bg: #F5F6F2; --ink: #1F2A2E; --muted: #6B767C; --line: #DDE2DC;
     --blue: #2B5FA3; --green: #2E7D5B; --red: #C4453A;
-    --basic: #2B5FA3; --adv: #2E7D5B; --ai: #B8741A;
+    --basic: #2B5FA3; --adv: #2E7D5B; --ai: #B8741A; --stat: #7A4FA0;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--ink); }
@@ -30,6 +30,7 @@
   .tracks button.on.basic { background: var(--basic); border-color: var(--basic); }
   .tracks button.on.adv   { background: var(--adv);   border-color: var(--adv); }
   .tracks button.on.ai    { background: var(--ai);    border-color: var(--ai); }
+  .tracks button.on.stat  { background: var(--stat);  border-color: var(--stat); }
 
   .tabs { display: flex; gap: 8px; margin-bottom: 9px; }
   .tabs:last-of-type { margin-bottom: 18px; }
@@ -124,6 +125,7 @@
     <button id="trBasic" class="basic" onclick="setTrack('basic')">英語<br>基礎</button>
     <button id="trAdv"   class="adv"   onclick="setTrack('adv')">英語<br>応用</button>
     <button id="trAi"    class="ai"    onclick="setTrack('ai')">AI<br>E資格</button>
+    <button id="trStat"  class="stat"  onclick="setTrack('stat')">統計<br>2級</button>
   </div>
   <div class="tabs">
     <button id="tabNight" onclick="setMode('night')">夜：おぼえる</button>
@@ -147,8 +149,8 @@
    localStorage … 進みぐあい。トラックごとに完全に別管理
    ================================================== */
 var KEY = "mainichi_anki_v2";
-var TRACKS = ["basic", "adv", "ai"];
-var TRACK_NAME = { basic: "英語（基礎）", adv: "英語（応用）", ai: "AI（E資格）" };
+var TRACKS = ["basic", "adv", "ai", "stat"];
+var TRACK_NAME = { basic: "英語（基礎）", adv: "英語（応用）", ai: "AI（E資格）", stat: "統計検定2級" };
 
 var ALL = [];
 var S = null;          // { track: "basic", basic:{...}, adv:{...}, ai:{...} }
@@ -320,7 +322,7 @@ fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
   ALL = d;
   for (var i = 0; i < ALL.length; i++) {
     var c = ALL[i];
-    if (!c.track) c.track = (c.kind === "esk") ? "ai" : "adv";
+    if (!c.track) c.track = (c.kind === "esk") ? "ai" : (c.kind === "stat") ? "stat" : "adv";
     c._id = c.track + "-" + c.day + "-" + i;
     if (!MAXDAY[c.track] || c.day > MAXDAY[c.track]) MAXDAY[c.track] = c.day;
   }
@@ -347,6 +349,7 @@ function render() {
   document.getElementById("trBasic").className = "basic" + (S.track === "basic" ? " on" : "");
   document.getElementById("trAdv").className   = "adv"   + (S.track === "adv"   ? " on" : "");
   document.getElementById("trAi").className    = "ai"    + (S.track === "ai"    ? " on" : "");
+  document.getElementById("trStat").className  = "stat"  + (S.track === "stat"  ? " on" : "");
   document.getElementById("tabNight").className = (MODE === "night") ? "on" : "";
   document.getElementById("tabMorning").className = (MODE === "morning") ? "on" : "";
   document.getElementById("tabReview").className = (MODE === "review") ? "on" : "";
