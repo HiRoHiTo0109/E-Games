@@ -85,6 +85,12 @@
   .done { text-align: center; padding: 42px 0 22px; }
   .done .big { font-size: 27px; font-weight: 700; margin-bottom: 10px; }
   .done .small { color: var(--muted); }
+  .blist button { display: block; width: 100%; text-align: left; padding: 13px 14px; margin-bottom: 8px;
+    border: 1px solid #d6d6d6; border-radius: 10px; background: #fff; font-size: 15px; }
+  .blist .sc { float: right; color: var(--muted); font-size: 13px; }
+  .range { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 10px 0; }
+  .range input { width: 64px; font-size: 17px; padding: 6px; text-align: center; }
+  .warn { background: #fff4e5; border: 1px solid #f0c27a; border-radius: 10px; padding: 12px; margin-bottom: 14px; font-size: 14px; line-height: 1.7; }
 
   .foot { margin-top: 36px; text-align: center; font-size: 14px; color: var(--muted); }
   .foot a { color: var(--muted); margin: 0 8px; white-space: nowrap; }
@@ -134,6 +140,7 @@
   <div class="tabs">
     <button id="tabReview" onclick="setMode('review')">復習</button>
     <button id="tabPast" onclick="setMode('past')">過去問</button>
+    <button id="tabTests" onclick="setMode('tests')">まとめテスト</button>
   </div>
   <div id="app"></div>
   <div class="foot">
@@ -158,6 +165,7 @@ var T = null;          // 今選んでいるトラックの状態（Sの中の�
 var MODE = "night";
 var LIST = [], IDX = 0;
 var MAXDAY = {}, PAST_DAY = 1;
+var BLOCK = 4;          // 何日ごとにまとめテストを出すか
 var JUST_LEARNED = [];
 
 /* 午前4時を1日の区切りにする（深夜に開いてもズレない） */
@@ -289,21 +297,28 @@ function showResult(ok, typed) {
 function finishQuiz() {
   if (QZ.ctx === "m") grade(QZ.ok, QZ.typed);
   else if (QZ.ctx === "r") gradeRv(QZ.ok, QZ.typed);
+  else if (QZ.ctx === "b") gradeB(QZ.ok, QZ.typed);
 }
 
-function emptyTrack() { return { day: 1, lastNight: "", pending: [], review: [], log: [] }; }
+function emptyTrack() { return { day: 1, lastNight: "", pending: [], review: [], log: [], btest: null, tests: [], blockDone: [] }; }
+function fixTrack(t) {
+  if (!S[t]) S[t] = emptyTrack();
+  var x = S[t];
+  if (typeof x.day !== "number") x.day = 1;
+  if (!x.pending) x.pending = [];
+  if (!x.review) x.review = [];
+  if (!x.log) x.log = [];
+  if (!x.tests) x.tests = [];
+  if (!x.blockDone) x.blockDone = [];
+  if (x.btest === undefined) x.btest = null;
+}
 function loadState() {
   try { var raw = localStorage.getItem(KEY); S = raw ? JSON.parse(raw) : null; }
   catch (e) { S = null; }
   if (!S) S = {};
   if (TRACKS.indexOf(S.track) < 0) S.track = "basic";
   for (var i = 0; i < TRACKS.length; i++) {
-    var t = TRACKS[i];
-    if (!S[t]) S[t] = emptyTrack();
-    if (typeof S[t].day !== "number") S[t].day = 1;
-    if (!S[t].pending) S[t].pending = [];
-    if (!S[t].review) S[t].review = [];
-    if (!S[t].log) S[t].log = [];
+    fixTrack(TRACKS[i]);
   }
   /* 旧バージョン（トラック統合時代）の進み具合を引き継ぐ */
   try {
@@ -328,7 +343,7 @@ fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
   }
   loadState();
   PAST_DAY = Math.max(1, T.day - 1);
-  MODE = (T.pending.length > 0) ? "morning" : "night";
+  MODE = startMode();
   render();
 }).catch(function () {
   document.getElementById("app").innerHTML =
@@ -339,8 +354,13 @@ fetch("cards.json").then(function (r) { return r.json(); }).then(function (d) {
 function setTrack(t) {
   S.track = t; T = S[t]; saveState();
   PAST_DAY = Math.max(1, T.day - 1);
-  MODE = (T.pending.length > 0) ? "morning" : "night";
+  MODE = startMode();
   render();
+}
+function startMode() {
+  if (T.pending.length > 0) return "morning";
+  if (T.btest && T.btest.forced) return "block";
+  return "night";
 }
 function setMode(m) { MODE = m; IDX = 0; render(); }
 
@@ -354,10 +374,14 @@ function render() {
   document.getElementById("tabMorning").className = (MODE === "morning") ? "on" : "";
   document.getElementById("tabReview").className = (MODE === "review") ? "on" : "";
   document.getElementById("tabPast").className = (MODE === "past") ? "on" : "";
+  document.getElementById("tabTests").className = (MODE === "tests" || MODE === "block") ? "on" : "";
+  document.getElementById("tabTests").textContent = "まとめテスト" + ((T.btest && T.btest.forced) ? "（!）" : "");
   document.getElementById("tabReview").textContent =
     "復習" + (T.review.length > 0 ? "（" + T.review.length + "）" : "");
 
   if (MODE === "night") { LIST = cardsOfDay(T.day); renderNight(); }
+  else if (MODE === "tests") { renderTests(); }
+  else if (MODE === "block") { renderBlock(); }
   else if (MODE === "morning") {
     LIST = [];
     for (var i = 0; i < T.pending.length; i++) { var c = byId(T.pending[i]); if (c) LIST.push(c); }
@@ -374,6 +398,13 @@ function render() {
 /* ============ 夜：おぼえる（1日1回・終えると翌日へ） ============ */
 function renderNight() {
   var app = document.getElementById("app");
+  if (T.btest && T.btest.forced) {
+    app.innerHTML = '<div class="done"><div class="big">先にまとめテスト</div>' +
+      '<div class="small">' + T.btest.from + '〜' + T.btest.to + '日目のまとめテストが終わると、<br>' +
+      '次の日に進めます。</div></div>' +
+      '<button class="act" onclick="setMode(\'block\')">まとめテストを受ける</button>';
+    return;
+  }
   if (T.lastNight === studyDate()) {
     app.innerHTML = '<div class="done"><div class="big">今夜はおわり</div>' +
       '<div class="small">' + TRACK_NAME[S.track] + ' の今日の分は終わりました。<br>' +
@@ -429,7 +460,16 @@ function renderMorning() {
 function showQuestion() {
   var app = document.getElementById("app");
   if (IDX >= LIST.length) {
-    T.pending = []; saveState();
+    T.pending = [];
+    var due = blockDueAfter(LIST);
+    saveState();
+    if (due) {
+      app.innerHTML = '<div class="done"><div class="big">おつかれさま！</div>' +
+        '<div class="small">' + due.from + '〜' + due.to + '日目の<b>まとめテスト</b>の日です。<br>' +
+        due.ids.length + '問がランダムに出ます。<br>終わるまで次の日には進めません。</div></div>' +
+        '<button class="act" onclick="setMode(\'block\')">まとめテストを受ける</button>';
+      return;
+    }
     var msg = (T.review.length > 0)
       ? '間違えた問題は「復習」にたまっています。<br>今は ' + T.review.length + ' 問です。'
       : '全問正解です。';
@@ -470,6 +510,140 @@ function grade(ok, typed) {
 function removeFromReview(id) {
   var k = T.review.indexOf(id);
   if (k >= 0) T.review.splice(k, 1);
+}
+
+/* ============ まとめテスト（4日ごと・ランダム出題） ============
+   T.btest = { from, to, ids:[出題順], pos:何問目, ok:正解数, forced:受けるまで夜に進めないか }
+   T.tests = [{ from, to, date, ok, total }]  … 受けた記録
+   T.blockDone = [4, 8, ...]  … 済んだ強制テストの最終日          */
+function blockIds(from, to) {
+  var ids = [];
+  for (var d = from; d <= to; d++) {
+    var cs = cardsOfDay(d);
+    for (var i = 0; i < cs.length; i++) ids.push(cs[i]._id);
+  }
+  return shuffle(ids);
+}
+function blockDueAfter(done) {
+  /* 朝テストで終えた日が4の倍数なら、その4日分のテストを強制で用意する */
+  var last = 0;
+  for (var i = 0; i < done.length; i++) if (done[i].day > last) last = done[i].day;
+  if (!last || last % BLOCK !== 0) return null;
+  if (T.blockDone.indexOf(last) >= 0) return null;
+  if (T.btest && T.btest.forced) return T.btest;
+  var from = last - BLOCK + 1, ids = blockIds(from, last);
+  if (!ids.length) return null;
+  T.btest = { from: from, to: last, ids: ids, pos: 0, ok: 0, forced: true };
+  return T.btest;
+}
+function startBlock(from, to) {
+  if (T.btest && T.btest.forced) {
+    alert(T.btest.from + "〜" + T.btest.to + "日目のまとめテストを先に終わらせてください。");
+    setMode("block"); return;
+  }
+  var ids = blockIds(from, to);
+  if (!ids.length) { alert("その範囲のカードがありません。"); return; }
+  T.btest = { from: from, to: to, ids: ids, pos: 0, ok: 0, forced: false };
+  saveState(); setMode("block");
+}
+function startCustom() {
+  var a = parseInt(document.getElementById("rgFrom").value, 10);
+  var b = parseInt(document.getElementById("rgTo").value, 10);
+  var mx = Math.max(1, T.day - 1);
+  if (isNaN(a) || isNaN(b) || a < 1 || b > mx || a > b) {
+    alert("1〜" + mx + " の範囲で、はじめ ≦ おわり になるように入れてください。"); return;
+  }
+  startBlock(a, b);
+}
+function lastScore(from, to) {
+  for (var i = T.tests.length - 1; i >= 0; i--) {
+    var r = T.tests[i];
+    if (r.from === from && r.to === to) return r.ok + " / " + r.total + "（" + r.date.slice(5) + "）";
+  }
+  return "まだ";
+}
+function renderTests() {
+  var app = document.getElementById("app");
+  var learned = T.day - 1;      /* 夜に覚え終えた最後の日 */
+  var h = '';
+  if (T.btest && T.btest.forced) {
+    h += '<div class="warn">' + T.btest.from + '〜' + T.btest.to + '日目のまとめテストが残っています。<br>' +
+         'これが終わるまで、夜の「おぼえる」は進めません。</div>' +
+         '<button class="act" onclick="setMode(\'block\')">受ける（' + (T.btest.pos + 1) + '問目から）</button>';
+  } else if (T.btest && T.btest.pos > 0 && T.btest.pos < T.btest.ids.length) {
+    h += '<button class="act sub" onclick="setMode(\'block\')">途中のテストを続ける（' +
+         T.btest.from + '〜' + T.btest.to + '日目）</button>';
+  }
+  h += '<div class="greet" style="margin-top:14px">4日ごとのまとめテスト（何度でも受けられます）</div><div class="blist">';
+  var n = 0;
+  for (var to = BLOCK; to <= learned; to += BLOCK) {
+    var from = to - BLOCK + 1;
+    h += '<button onclick="startBlock(' + from + ',' + to + ')">' + from + '〜' + to + '日目' +
+         '<span class="sc">前回 ' + lastScore(from, to) + '</span></button>';
+    n++;
+  }
+  if (!n) h += '<div class="note">' + BLOCK + '日目まで覚えると、ここにテストが出てきます。</div>';
+  h += '</div>';
+  if (learned >= 1) {
+    h += '<div class="greet" style="margin-top:18px">範囲を自分で決めて受ける</div>' +
+         '<div class="range"><input id="rgFrom" type="number" value="1" min="1" max="' + learned + '">' +
+         '日目 〜 <input id="rgTo" type="number" value="' + learned + '" min="1" max="' + learned + '">日目</div>' +
+         '<button class="act sub" onclick="startCustom()">この範囲でテストする</button>';
+  }
+  h += '<div class="note">間違えた問題は「復習」にも入ります。</div>';
+  app.innerHTML = h;
+}
+function renderBlock() {
+  if (!T.btest) { MODE = "tests"; renderTests(); return; }
+  LIST = [];
+  for (var i = 0; i < T.btest.ids.length; i++) { var c = byId(T.btest.ids[i]); if (c) LIST.push(c); }
+  IDX = T.btest.pos;
+  showBlockQuestion();
+}
+function showBlockQuestion() {
+  var app = document.getElementById("app"), B = T.btest;
+  if (IDX >= LIST.length) {
+    T.tests.push({ from: B.from, to: B.to, date: studyDate(), ok: B.ok, total: LIST.length });
+    if (B.forced && T.blockDone.indexOf(B.to) < 0) T.blockDone.push(B.to);
+    var wasForced = B.forced, ok = B.ok, total = LIST.length;
+    T.btest = null; saveState();
+    var pct = total ? Math.round(ok * 100 / total) : 0;
+    app.innerHTML = '<div class="done"><div class="big">' + ok + ' / ' + total + ' 問正解</div>' +
+      '<div class="small">' + B.from + '〜' + B.to + '日目のまとめテスト（' + pct + '%）<br>' +
+      (ok < total ? '間違えた問題は「復習」に入りました。' : '全問正解です！') +
+      (wasForced ? '<br>今夜から次の日に進めます。' : '') + '</div></div>' +
+      '<button class="act sub" onclick="setMode(\'tests\')">まとめテストの一覧へ</button>';
+    document.getElementById("tabTests").textContent = "まとめテスト";
+    document.getElementById("tabReview").textContent =
+      "復習" + (T.review.length > 0 ? "（" + T.review.length + "）" : "");
+    return;
+  }
+  var c = LIST[IDX];
+  var h = '<div class="greet">まとめテスト ' + B.from + '〜' + B.to + '日目　' +
+          (IDX + 1) + ' / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
+  if (isQuiz(c)) { app.innerHTML = h + quizHtml(c, "b"); drawQuiz(); window.scrollTo(0, 0); return; }
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<textarea id="btyped" placeholder="思い出して書く"></textarea>';
+  h += '<button class="act" id="bBtn" onclick="revealB()">こたえを見る</button>';
+  h += '<div id="bans" class="hide">';
+  h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
+  if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += '<div class="two"><button class="act ng" onclick="gradeB(0)">× 言えなかった</button>';
+  h += '<button class="act ok" onclick="gradeB(1)">○ 言えた</button></div></div>';
+  app.innerHTML = h; window.scrollTo(0, 0);
+}
+function revealB() {
+  document.getElementById("bans").className = "";
+  document.getElementById("bBtn").className = "act hide";
+}
+function gradeB(ok, typed) {
+  var c = LIST[IDX];
+  if (typed === undefined) typed = document.getElementById("btyped").value;
+  if (ok) T.btest.ok++;
+  else if (T.review.indexOf(c._id) < 0) T.review.push(c._id);
+  T.log.push({ id: c._id, day: studyDate(), ok: ok, bt: 1, typed: typed });
+  T.btest.pos = IDX + 1;
+  saveState(); IDX++; showBlockQuestion();
 }
 
 /* ============ 復習（間違えた問題だけ・○で消える） ============ */
@@ -609,7 +783,7 @@ function fixDay() {
   var n = parseInt(input, 10);
   if (isNaN(n) || n < 1 || n > mx) { alert("1〜" + mx + " の数字を入れてください。"); return; }
   if (!confirm(n + " 日目から再開します。よろしいですか？\n（復習箱はそのまま残ります）")) return;
-  T.day = n; T.lastNight = ""; T.pending = [];
+  T.day = n; T.lastNight = ""; T.pending = []; T.btest = null;
   PAST_DAY = Math.max(1, n - 1);
   saveState(); MODE = "night"; render();
 }
@@ -632,9 +806,7 @@ function restore() {
       try {
         S = JSON.parse(r.result);
         if (TRACKS.indexOf(S.track) < 0) S.track = "basic";
-        for (var i = 0; i < TRACKS.length; i++) {
-          if (!S[TRACKS[i]]) S[TRACKS[i]] = emptyTrack();
-        }
+        for (var i = 0; i < TRACKS.length; i++) fixTrack(TRACKS[i]);
         T = S[S.track]; saveState();
         PAST_DAY = Math.max(1, T.day - 1);
         render(); alert("復元しました");
