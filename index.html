@@ -120,6 +120,14 @@
   .res.good { background: #E6F2EC; }
   .res.bad  { background: #F8E7E5; }
   .res .mark { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
+  .cand { border: 2px dashed #9aa7b8; border-radius: 12px; padding: 14px; margin: 12px 0; font-size: 17px; line-height: 1.6; background: #fafbfd; }
+  .cand.right { border: 2px solid var(--green); background: #E6F2EC; }
+  .cand.wrong { border: 2px solid var(--red); background: #F8E7E5; }
+  .tfq { font-size: 14px; color: var(--muted); margin-top: 14px; }
+  .memo { width: 100%; min-height: 56px; font-size: 15px; padding: 8px; border-radius: 10px; border: 1px solid #ccc; margin-top: 12px; box-sizing: border-box; }
+  .easy { background: #FFF8E1; border-left: 4px solid #F2B705; border-radius: 8px; padding: 12px 14px; margin-top: 10px; font-size: 15px; line-height: 1.8; white-space: pre-wrap; }
+  .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 6px; }
+  .tag { display: inline-block; font-size: 12px; background: #eef1f6; border-radius: 6px; padding: 1px 7px; margin-left: 6px; }
   .res.good .mark { color: var(--green); }
   .res.bad  .mark { color: var(--red); }
   button.act:disabled { opacity: .4; }
@@ -220,8 +228,24 @@ function answerText(c) {
   return "";
 }
 
-function quizHtml(c, ctx) {
-  QZ = { c: c, ctx: ctx, picked: [], done: false, chosen: -1 };
+var EASY_N = 0;
+function easyHtml(c) {
+  /* やさしい解説（c.easy）があるときだけ、開くボタンを付ける */
+  if (!c.easy) return "";
+  var id = "easy" + (++EASY_N);
+  return '<button class="act sub" style="margin-top:10px" onclick="openEasy(\'' + id + '\', this)">もっとかみ砕いて</button>' +
+         '<div id="' + id + '" class="easy hide">' + esc(c.easy) + '</div>';
+}
+function openEasy(id, btn) {
+  document.getElementById(id).className = "easy";
+  btn.className = "act sub hide";
+}
+function quizHtml(c, ctx, tf) {
+  QZ = { c: c, ctx: ctx, picked: [], done: false, chosen: -1, memo: "" };
+  /* B：○×形式（tf に選択肢の番号が入っているとき）*/
+  QZ.tf = (c.type === "choice" && typeof tf === "number") ? tf : -1;
+  /* C：4択・5択はまず選択肢を隠して、自分で考えてから開く */
+  QZ.hidden = (c.type === "choice" && QZ.tf < 0 && ctx !== "p");
   if (c.type === "choice") {
     QZ.opts = shuffle((c.choices || []).map(function (t, i) { return { t: t, i: i }; }));
   } else {
@@ -233,7 +257,21 @@ function quizHtml(c, ctx) {
 }
 function drawQuiz() {
   var c = QZ.c, h = "", k;
-  if (c.type === "choice") {
+  if (c.type === "choice" && QZ.tf >= 0) {
+    h += '<div class="tfq">この問題の答えとして、次の選択肢は正しい？</div>';
+    var cc = "cand";
+    if (QZ.done) cc += (QZ.ok ? " right" : " wrong");
+    h += '<div class="' + cc + '">' + esc(c.choices[QZ.tf]) + '</div>';
+    if (!QZ.done) {
+      h += '<div class="two"><button class="act ok" onclick="pickTF(1)">○ 正しい</button>' +
+           '<button class="act ng" onclick="pickTF(0)">× 正しくない</button></div>';
+    }
+  } else if (c.type === "choice" && QZ.hidden) {
+    h += '<textarea id="qzMemo" class="memo" placeholder="自分の答えをメモ（書かなくてもOK）"></textarea>';
+    h += '<button class="act" onclick="openChoices()">考えた → 選択肢を見る</button>';
+    h += '<div class="hint">選択肢を見る前に、答えやその理由を頭の中で言ってみましょう</div>';
+  } else if (c.type === "choice") {
+    if (QZ.memo) h += '<div class="hint" style="text-align:left">自分のメモ：' + esc(QZ.memo) + '</div>';
     for (k = 0; k < QZ.opts.length; k++) {
       var cls = "opt";
       if (QZ.done) {
@@ -277,6 +315,16 @@ function checkOrder() {
   for (var i = 0; i < alts.length && !ok; i++) if (norm(c, typed) === norm(c, alts[i])) ok = true;
   showResult(ok ? 1 : 0, typed);
 }
+function openChoices() {
+  var m = document.getElementById("qzMemo");
+  QZ.memo = m ? m.value.trim() : "";
+  QZ.hidden = false; drawQuiz();
+}
+function pickTF(v) {
+  if (QZ.done) return;
+  var truth = (QZ.tf === QZ.c.correct) ? 1 : 0;
+  showResult(v === truth ? 1 : 0, (v ? "○" : "×") + "：" + QZ.c.choices[QZ.tf]);
+}
 function pickOpt(k) {
   if (QZ.done) return;
   QZ.chosen = k;
@@ -288,16 +336,29 @@ function showResult(ok, typed) {
   drawQuiz();
   var h = '<div class="res ' + (ok ? 'good' : 'bad') + '">';
   h += '<div class="mark">' + (ok ? '○ 正解！' : '× ざんねん') + '</div>';
-  if (!ok || c.type !== "choice") h += '<div class="a" style="margin:0 0 6px">' + esc(answerText(c)) + '</div>';
+  if (QZ.tf >= 0) {
+    h += '<div style="font-size:14px;margin:0 0 4px">この選択肢は' + (QZ.tf === c.correct ? '<b>正しい</b>' : '<b>正しくない</b>') + '。正解は：</div>';
+    h += '<div class="a" style="margin:0 0 6px">' + esc(answerText(c)) + '</div>';
+  } else if (!ok || c.type !== "choice") h += '<div class="a" style="margin:0 0 6px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp" style="margin:0">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
   h += '</div>';
-  if (QZ.ctx !== "p") h += '<button class="act" onclick="finishQuiz()">つぎへ</button>';
+  if (QZ.ctx !== "p") {
+    if (ok) {
+      h += '<div class="two"><button class="act ok" onclick="finishQuiz(0)">◎ 自信あり</button>' +
+           '<button class="act sub" onclick="finishQuiz(1)">△ なんとなく</button></div>' +
+           '<div class="hint">「なんとなく」は正解でも復習に入ります</div>';
+    } else h += '<button class="act" onclick="finishQuiz(0)">つぎへ</button>';
+  }
   document.getElementById("qzRes").innerHTML = h;
 }
-function finishQuiz() {
-  if (QZ.ctx === "m") grade(QZ.ok, QZ.typed);
-  else if (QZ.ctx === "r") gradeRv(QZ.ok, QZ.typed);
-  else if (QZ.ctx === "b") gradeB(QZ.ok, QZ.typed);
+function finishQuiz(weak) {
+  /* A：「なんとなく」の正解は、まぐれ当たりかもしれないので × と同じ扱い（復習へ） */
+  var ok = (QZ.ok && !weak) ? 1 : 0;
+  var typed = (weak ? "[なんとなく] " : "") + (QZ.memo ? "[メモ:" + QZ.memo + "] " : "") + (QZ.typed || "");
+  if (QZ.ctx === "m") grade(ok, typed);
+  else if (QZ.ctx === "r") gradeRv(ok, typed);
+  else if (QZ.ctx === "b") gradeB(ok, typed);
 }
 
 function emptyTrack() { return { day: 1, lastNight: "", pending: [], review: [], log: [], btest: null, tests: [], blockDone: [] }; }
@@ -440,6 +501,7 @@ function showNightCard() {
   h += '<div class="q' + (c.type === "choice" ? ' long' : '') + '">' + esc(c.question) + '</div>';
   h += '<div class="a">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
   h += '<button class="act" onclick="IDX++;showNightCard()">' +
        (IDX + 1 < LIST.length ? "つぎへ" : "おぼえた") + '</button>';
   app.innerHTML = h;
@@ -488,6 +550,7 @@ function showQuestion() {
   h += '<div id="ans" class="hide">';
   h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
   h += '<div class="two">';
   h += '<button class="act ng" onclick="grade(0)">× 言えなかった</button>';
   h += '<button class="act ok" onclick="grade(1)">○ 言えた</button>';
@@ -525,16 +588,34 @@ function blockIds(from, to) {
   return shuffle(ids);
 }
 function blockDueAfter(done) {
-  /* 朝テストで終えた日が4の倍数なら、その4日分のテストを強制で用意する */
+  /* 朝テストで終えた日の「1日前まで」の4日分を出す。
+     例：5日目の朝テストが終わったら 1〜4日目、9日目なら 5〜8日目。
+     今朝やったばかりの日は覚えたてなので入れない（次の回に入る） */
   var last = 0;
   for (var i = 0; i < done.length; i++) if (done[i].day > last) last = done[i].day;
-  if (!last || last % BLOCK !== 0) return null;
-  if (T.blockDone.indexOf(last) >= 0) return null;
+  var to = last - 1;
+  if (to < BLOCK || to % BLOCK !== 0) return null;
+  if (T.blockDone.indexOf(to) >= 0) return null;
   if (T.btest && T.btest.forced) return T.btest;
-  var from = last - BLOCK + 1, ids = blockIds(from, last);
+  var from = to - BLOCK + 1, ids = blockIds(from, to);
   if (!ids.length) return null;
-  T.btest = { from: from, to: last, ids: ids, pos: 0, ok: 0, forced: true };
+  T.btest = { from: from, to: to, ids: ids, pos: 0, ok: 0, forced: true, tf: makeTF(ids) };
   return T.btest;
+}
+function makeTF(ids) {
+  /* B：選択問題のおよそ半分を○×に。出す選択肢は 4割が正解・6割が不正解 */
+  var tf = {};
+  for (var i = 0; i < ids.length; i++) {
+    var c = byId(ids[i]);
+    if (!c || c.type !== "choice" || !c.choices || Math.random() < 0.5) continue;
+    if (Math.random() < 0.4) tf[c._id] = c.correct;
+    else {
+      var wrong = [];
+      for (var k = 0; k < c.choices.length; k++) if (k !== c.correct) wrong.push(k);
+      tf[c._id] = wrong[Math.floor(Math.random() * wrong.length)];
+    }
+  }
+  return tf;
 }
 function startBlock(from, to) {
   if (T.btest && T.btest.forced) {
@@ -543,7 +624,7 @@ function startBlock(from, to) {
   }
   var ids = blockIds(from, to);
   if (!ids.length) { alert("その範囲のカードがありません。"); return; }
-  T.btest = { from: from, to: to, ids: ids, pos: 0, ok: 0, forced: false };
+  T.btest = { from: from, to: to, ids: ids, pos: 0, ok: 0, forced: false, tf: makeTF(ids) };
   saveState(); setMode("block");
 }
 function startCustom() {
@@ -619,15 +700,18 @@ function showBlockQuestion() {
     return;
   }
   var c = LIST[IDX];
+  var tf = (B.tf && typeof B.tf[c._id] === "number") ? B.tf[c._id] : undefined;
   var h = '<div class="greet">まとめテスト ' + B.from + '〜' + B.to + '日目　' +
-          (IDX + 1) + ' / ' + LIST.length + ' 問　（' + c.day + '日目）</div>';
-  if (isQuiz(c)) { app.innerHTML = h + quizHtml(c, "b"); drawQuiz(); window.scrollTo(0, 0); return; }
+          (IDX + 1) + ' / ' + LIST.length + ' 問　（' + c.day + '日目）' +
+          (tf !== undefined ? '<span class="tag">○×</span>' : '') + '</div>';
+  if (isQuiz(c)) { app.innerHTML = h + quizHtml(c, "b", tf); drawQuiz(); window.scrollTo(0, 0); return; }
   h += '<div class="q">' + esc(c.question) + '</div>';
   h += '<textarea id="btyped" placeholder="思い出して書く"></textarea>';
   h += '<button class="act" id="bBtn" onclick="revealB()">こたえを見る</button>';
   h += '<div id="bans" class="hide">';
   h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
   h += '<div class="two"><button class="act ng" onclick="gradeB(0)">× 言えなかった</button>';
   h += '<button class="act ok" onclick="gradeB(1)">○ 言えた</button></div></div>';
   app.innerHTML = h; window.scrollTo(0, 0);
@@ -675,6 +759,7 @@ function showReviewCard() {
   h += '<div id="rvans" class="hide">';
   h += '<div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
   if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
   h += '<div class="two">';
   h += '<button class="act ng" onclick="gradeRv(0)">× まだダメ</button>';
   h += '<button class="act ok" onclick="gradeRv(1)">○ 言えた</button>';
@@ -749,7 +834,7 @@ function showPastCard() {
     h += '<button class="act sub" id="pExpBtn" onclick="showPart(\'pExp\')">説明を見る</button>';
     h += '</div>';
     h += '<div id="pAns" class="hide"><div class="a" style="margin-top:18px">' + esc(answerText(c)) + '</div></div>';
-    h += '<div id="pExp" class="hide"><div class="exp" style="margin-top:14px">' + esc(c.explanation || "") + '</div></div>';
+    h += '<div id="pExp" class="hide"><div class="exp" style="margin-top:14px">' + esc(c.explanation || "") + '</div>' + easyHtml(c) + '</div>';
   }
   h += '<button class="act sub" id="pBoxBtn" onclick="toggleBox(\'' + c._id + '\')">' +
        (inBox ? "復習からはずす" : "復習に入れる") + '</button>';
