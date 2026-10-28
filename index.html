@@ -263,12 +263,28 @@ function openEasy(id, btn) {
   document.getElementById(id).className = "easy";
   btn.className = "act sub hide";
 }
+/* 選択肢そのものが長い文章で、その中から正しい文を選ぶ問題か
+   （例：「〜に関する記述として、最も適切なものはどれか」）。
+   こういう問題は先に答えを書きようがないので、選択肢を隠さない。 */
+function isStatementQ(c) {
+  if (c.type !== "choice" || !c.choices) return false;
+  var len = 0;
+  for (var i = 0; i < c.choices.length; i++) len += String(c.choices[i]).length;
+  return len / c.choices.length >= 25 &&
+         /(記述|説明|正しい|適切|誤って|当てはまる|組み合わせ)/.test(c.question);
+}
+/* 選択肢を隠しているときのメモ欄の案内（問題の形に合わせて変える） */
+function memoHint(c) {
+  var num = true;
+  for (var i = 0; i < c.choices.length; i++) if (!/^[\s\d.,%＋+−\-×x/()（）万円人倍点°FC℃]*$/.test(String(c.choices[i]))) num = false;
+  return num ? "計算した答えをメモ（書かなくてもOK）" : "思いついた用語や答えをメモ（書かなくてもOK）";
+}
 function quizHtml(c, ctx, tf) {
   QZ = { c: c, ctx: ctx, picked: [], done: false, chosen: -1, memo: "" };
   /* B：○×形式（tf に選択肢の番号が入っているとき）*/
   QZ.tf = (c.type === "choice" && typeof tf === "number") ? tf : -1;
   /* C：4択・5択はまず選択肢を隠して、自分で考えてから開く */
-  QZ.hidden = (c.type === "choice" && QZ.tf < 0 && ctx !== "p");
+  QZ.hidden = (c.type === "choice" && QZ.tf < 0 && ctx !== "p" && !isStatementQ(c));
   if (c.type === "choice") {
     QZ.opts = shuffle((c.choices || []).map(function (t, i) { return { t: t, i: i }; }));
   } else {
@@ -290,10 +306,12 @@ function drawQuiz() {
            '<button class="act ng" onclick="pickTF(0)">× 正しくない</button></div>';
     }
   } else if (c.type === "choice" && QZ.hidden) {
-    h += '<textarea id="qzMemo" class="memo" placeholder="自分の答えをメモ（書かなくてもOK）"></textarea>';
+    h += '<textarea id="qzMemo" class="memo" placeholder="' + memoHint(c) + '"></textarea>';
     h += '<button class="act" onclick="openChoices()">考えた → 選択肢を見る</button>';
     h += '<div class="hint">選択肢を見る前に、答えやその理由を頭の中で言ってみましょう</div>';
   } else if (c.type === "choice") {
+    if (!QZ.done && isStatementQ(c) && QZ.ctx !== "p")
+      h += '<div class="hint" style="text-align:left">選ぶ前に、それぞれの文が『○か×か』を1つずつ考えてみましょう</div>';
     if (QZ.memo) h += '<div class="hint" style="text-align:left">自分のメモ：' + esc(QZ.memo) + '</div>';
     for (k = 0; k < QZ.opts.length; k++) {
       var cls = "opt";
@@ -334,9 +352,39 @@ function checkOrder() {
   var c = QZ.c;
   var typed = QZ.picked.map(function (k) { return QZ.tiles[k]; }).join(joinSep(c));
   var ok = (norm(c, typed) === norm(c, rightPieces(c).join(joinSep(c))));
-  var alts = c.alts || [];
+  var alts = (c.alts || []).concat((S.alts && S.alts[c._id]) || []);
   for (var i = 0; i < alts.length && !ok; i++) if (norm(c, typed) === norm(c, alts[i])) ok = true;
+  /* 使った単語は正解とまったく同じで、並び順だけが違うとき → 自分で判定してもらう */
+  if (!ok && sameWords(c, typed)) { showOrderAlt(typed); return; }
   showResult(ok ? 1 : 0, typed);
+}
+function sameWords(c, typed) {
+  var a = QZ.picked.map(function (k) { return norm(c, QZ.tiles[k]); }).sort().join("|");
+  var b = rightPieces(c).map(function (w) { return norm(c, w); }).sort().join("|");
+  return a === b;
+}
+function showOrderAlt(typed) {
+  var c = QZ.c;
+  QZ.done = true; QZ.ok = 0; QZ.typed = typed; drawQuiz();
+  document.getElementById("qzRes").innerHTML =
+    '<div class="res"><div class="mark">△ 並び順だけがちがいます</div>' +
+    '<div style="font-size:14px">あなたの答え：</div><div class="a" style="margin:0 0 6px;color:#555">' + esc(typed) + '</div>' +
+    '<div style="font-size:14px">登録されている正解：</div><div class="a" style="margin:0 0 6px">' + esc(answerText(c)) + '</div>' +
+    '<div class="hint" style="text-align:left">意味が同じで、英語として自然なら「これも正しい」を押してください。' +
+    '次からはこの並び方も自動で正解になります。</div></div>' +
+    '<div class="two"><button class="act ok" onclick="acceptAlt(1)">これも正しい</button>' +
+    '<button class="act ng" onclick="acceptAlt(0)">やっぱりまちがい</button></div>';
+}
+function acceptAlt(yes) {
+  var c = QZ.c, typed = QZ.typed;
+  if (yes) {
+    if (!S.alts) S.alts = {};
+    if (!S.alts[c._id]) S.alts[c._id] = [];
+    if (S.alts[c._id].indexOf(typed) < 0) S.alts[c._id].push(typed);
+    saveState();
+  }
+  QZ.done = false;
+  showResult(yes ? 1 : 0, typed);
 }
 function openChoices() {
   var m = document.getElementById("qzMemo");
@@ -381,7 +429,7 @@ function finishQuiz(weak) {
   var typed = (weak ? "[なんとなく] " : "") + (QZ.memo ? "[メモ:" + QZ.memo + "] " : "") + (QZ.typed || "");
   if (QZ.ctx === "m") grade(ok, typed);
   else if (QZ.ctx === "r") gradeRv(ok, typed);
-  else if (QZ.ctx === "b") gradeB(ok, typed);
+  else if (QZ.ctx === "b") gradeB(QZ.ok, typed, weak);
   else if (QZ.ctx === "d") gradeD(QZ.ok, weak, typed);
 }
 
@@ -710,14 +758,15 @@ function renderBlock() {
 function showBlockQuestion() {
   var app = document.getElementById("app"), B = T.btest;
   if (IDX >= LIST.length) {
-    T.tests.push({ from: B.from, to: B.to, date: studyDate(), ok: B.ok, total: LIST.length });
+    T.tests.push({ from: B.from, to: B.to, date: studyDate(), ok: B.ok, weak: B.weak || 0, total: LIST.length });
     if (B.forced && T.blockDone.indexOf(B.to) < 0) T.blockDone.push(B.to);
-    var wasForced = B.forced, ok = B.ok, total = LIST.length;
+    var wasForced = B.forced, ok = B.ok, total = LIST.length, weak = B.weak || 0;
     T.btest = null; saveState();
     var pct = total ? Math.round(ok * 100 / total) : 0;
     app.innerHTML = '<div class="done"><div class="big">' + ok + ' / ' + total + ' 問正解</div>' +
       '<div class="small">' + B.from + '〜' + B.to + '日目のまとめテスト（' + pct + '%）<br>' +
-      (ok < total ? '間違えた問題は「復習」に入りました。' : '全問正解です！') +
+      (weak ? '（うち「なんとなく」' + weak + '問）<br>' : '') +
+      (ok < total || weak ? '間違えた問題と「なんとなく」の問題は「復習」に入りました。' : '全問正解です！') +
       (wasForced ? '<br>今夜から次の日に進めます。' : '') + '</div></div>' +
       '<button class="act sub" onclick="setMode(\'tests\')">まとめテストの一覧へ</button>';
     document.getElementById("tabTests").textContent = "まとめテスト";
@@ -746,12 +795,13 @@ function revealB() {
   document.getElementById("bans").className = "";
   document.getElementById("bBtn").className = "act hide";
 }
-function gradeB(ok, typed) {
+function gradeB(ok, typed, weak) {
   var c = LIST[IDX];
   if (typed === undefined) typed = document.getElementById("btyped").value;
-  if (ok) T.btest.ok++;
-  else if (T.review.indexOf(c._id) < 0) T.review.push(c._id);
-  T.log.push({ id: c._id, day: studyDate(), ok: ok, bt: 1, typed: typed });
+  if (ok) T.btest.ok++;                                    /* 正解はなんとなくでも正解数に入れる */
+  if (ok && weak) T.btest.weak = (T.btest.weak || 0) + 1;
+  if ((!ok || weak) && T.review.indexOf(c._id) < 0) T.review.push(c._id);   /* 苦手は復習へ */
+  T.log.push({ id: c._id, day: studyDate(), ok: (ok && !weak) ? 1 : 0, bt: 1, weak: weak ? 1 : 0, typed: typed });
   T.btest.pos = IDX + 1;
   saveState(); IDX++; showBlockQuestion();
 }
@@ -876,7 +926,7 @@ function dgWeak(scope) {
 }
 function dgStats() { if (!S.dungeon) S.dungeon = { best: 0, clears: 0, runs: 0 }; return S.dungeon; }
 function renderDungeon() {
-  if (DG) { dgShow(); return; }
+  if (DG) { dgResumeMenu(); return; }
   var st = dgStats(), cur = dgLearned("cur").length, all = dgLearned("all").length;
   Sound.playBGM("field");
   var h = '<div class="dgbox">' + dgBgmBtn() + '<div class="dgenemy">🏰</div>' +
@@ -897,7 +947,7 @@ function dgStart(scope) {
   if (!pool.length) return;
   dgStats().runs++; saveState();
   DG = { scope: scope, floor: 0, php: PLAYER_MAX, ehp: FLOORS[0].hp, pool: pool, used: {},
-         ok: 0, total: 0, msg: FLOORS[0].n + 'があらわれた！', anim: "", cleared: false, cur: null,
+         ok: 0, total: 0, msg: FLOORS[0].n + 'があらわれた！', anim: "", cleared: false, cur: null, phase: "battle",
          imgs: dgPickImgs() };
   Sound.playBGM("battle");
   dgNext();
@@ -933,7 +983,8 @@ function dgHeader() {
     '<div class="bar e"><div style="width:' + Math.max(0, DG.ehp * 100 / f.hp) + '%"></div></div>' +
     '<div class="dglabel">あなたのHP ' + Math.max(0, DG.php) + ' / ' + PLAYER_MAX + '</div>' +
     '<div class="bar p"><div style="width:' + Math.max(0, DG.php * 100 / PLAYER_MAX) + '%"></div></div>' +
-    '<div class="dgmsg">' + DG.msg + '</div></div>';
+    '<div class="dgmsg">' + DG.msg + '</div>' +
+    '<div class="dgtop" style="margin-top:8px"><button class="dgbgm" onclick="dgQuit()">🏃 にげる</button></div></div>';
 }
 function dgShow() {
   var app = document.getElementById("app"), c = DG.cur.c;
@@ -982,8 +1033,11 @@ function dgFloorClear() {
   if (f.boss) { dgEnd(true); return; }
   setTimeout(function () { if (DG) Sound.playBGM("field"); }, 1500);
   var heal = Math.min(20, PLAYER_MAX - DG.php);
-  DG.php += heal;
-  var nf = FLOORS[DG.floor + 1];
+  DG.php += heal; DG.phase = "stairs"; DG.heal = heal;
+  dgStairs();
+}
+function dgStairs() {      /* 階段の画面（途中で抜けて戻ったときも、ここから再開できる） */
+  var f = FLOORS[DG.floor], nf = FLOORS[DG.floor + 1], heal = DG.heal || 0;
   document.getElementById("app").innerHTML =
     '<div class="dgbox"><div class="dgenemy">🪜</div><div class="dgname">' + f.n + 'をたおした！</div>' +
     '<div class="dgmsg" style="text-align:center">' + (heal ? '休んで HP が ' + heal + ' 回復した。<br>' : '') +
@@ -992,10 +1046,36 @@ function dgFloorClear() {
   window.scrollTo(0, 0);
 }
 function dgDown() {
-  DG.floor++; DG.ehp = FLOORS[DG.floor].hp; DG.anim = "";
+  DG.floor++; DG.ehp = FLOORS[DG.floor].hp; DG.anim = ""; DG.phase = "battle";
   Sound.playBGM(FLOORS[DG.floor].boss ? "boss" : "battle");
   DG.msg = FLOORS[DG.floor].n + 'があらわれた！' + (FLOORS[DG.floor].boss ? '（苦手な問題で攻めてくる！）' : '');
   dgNext();
+}
+function dgResumeMenu() {
+  /* ダンジョンの途中で別のタブへ行き、戻ってきたとき */
+  Sound.stopBGM();
+  document.getElementById("app").innerHTML =
+    '<div class="dgbox"><div class="dgenemy">⛺</div><div class="dgname">冒険の途中です</div>' +
+    '<div class="dgmsg" style="text-align:center">地下' + (DG.floor + 1) + '階　HP ' + DG.php + ' / ' + PLAYER_MAX +
+    '<br>正解 ' + DG.ok + ' / ' + DG.total + ' 問</div></div>' +
+    '<button class="act" onclick="dgResume()">続きから冒険する</button>' +
+    '<button class="act sub" onclick="dgQuit(true)">あきらめて地上に戻る</button>';
+}
+function dgResume() {
+  if (DG.phase === "stairs") { Sound.playBGM("field"); dgStairs(); return; }
+  Sound.playBGM(FLOORS[DG.floor].boss ? "boss" : "battle");
+  DG.anim = ""; dgShow();
+}
+function dgQuit(noAsk) {
+  if (!noAsk && !confirm("ダンジョンから逃げますか？\n（答えた問題の記録と復習はそのまま残ります）")) return;
+  var ok = DG.ok, total = DG.total, fl = DG.floor + 1;
+  Sound.stopBGM(); DG = null;
+  document.getElementById("app").innerHTML =
+    '<div class="dgbox"><div class="dgenemy">🏃</div><div class="dgname">地下' + fl + '階から逃げ帰った</div>' +
+    '<div class="dgmsg" style="text-align:center">正解 ' + ok + ' / ' + total + ' 問<br>' +
+    'まちがえた問題と「なんとなく」の問題は「復習」に入っています。</div></div>' +
+    '<button class="act" onclick="setMode(\'dungeon\')">もう一度挑む</button>';
+  window.scrollTo(0, 0);
 }
 function dgEnd(clear) {
   var st = dgStats(), ok = DG.ok, total = DG.total, fl = DG.floor + 1;
