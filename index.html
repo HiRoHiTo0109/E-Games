@@ -40,6 +40,26 @@
     background: #fff; color: var(--muted); font-family: inherit;
   }
   .tabs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .tabs button.dg { background: #3b2a5c; border-color: #3b2a5c; color: #ffd84d; font-weight: 700; }
+  .tabs button.dg.on { background: #22163a; border-color: #ffd84d; }
+  .dgbox { background: #1d1530; color: #f3eefc; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .dgfloor { font-size: 13px; color: #c9b8ff; display: flex; justify-content: space-between; }
+  .dgenemy { text-align: center; font-size: 72px; line-height: 1.1; margin: 6px 0 2px; }
+  .dgname { text-align: center; font-weight: 700; font-size: 17px; margin-bottom: 6px; }
+  .bar { height: 12px; background: #3a2f52; border-radius: 6px; overflow: hidden; margin: 4px 0 8px; }
+  .bar > div { height: 100%; transition: width .4s; }
+  .bar.e > div { background: #e0544a; }
+  .bar.p > div { background: #44c08a; }
+  .dglabel { font-size: 12px; color: #c9b8ff; }
+  .dgmsg { background: #2c2246; border-radius: 8px; padding: 8px 10px; font-size: 14px; min-height: 20px; margin-top: 6px; }
+  .shake { animation: shake .45s; }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-10px)} 40%{transform:translateX(10px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
+  .ouch { animation: ouch .5s; }
+  @keyframes ouch { 0%,100%{background:#1d1530} 30%{background:#6b1f2a} }
+  .dgpick button { margin-bottom: 8px; }
+  .dgimg { height: 120px; max-width: 100%; object-fit: contain; image-rendering: pixelated; }
+  .dgtop { display: flex; justify-content: flex-end; }
+  .dgbgm { background: none; border: 1px solid #6f5aa8; color: #ffd84d; border-radius: 8px; font-size: 12px; padding: 3px 8px; }
 
   .greet { font-size: 15px; color: var(--muted); margin-bottom: 6px; }
   .note { font-size: 13px; color: var(--muted); margin-top: 18px; text-align: center; line-height: 1.8; }
@@ -149,6 +169,9 @@
     <button id="tabReview" onclick="setMode('review')">復習</button>
     <button id="tabPast" onclick="setMode('past')">過去問</button>
     <button id="tabTests" onclick="setMode('tests')">まとめテスト</button>
+  </div>
+  <div class="tabs">
+    <button id="tabDungeon" class="dg" onclick="setMode('dungeon')">⚔ ダンジョンに挑む</button>
   </div>
   <div id="app"></div>
   <div class="foot">
@@ -359,6 +382,7 @@ function finishQuiz(weak) {
   if (QZ.ctx === "m") grade(ok, typed);
   else if (QZ.ctx === "r") gradeRv(ok, typed);
   else if (QZ.ctx === "b") gradeB(ok, typed);
+  else if (QZ.ctx === "d") gradeD(QZ.ok, weak, typed);
 }
 
 function emptyTrack() { return { day: 1, lastNight: "", pending: [], review: [], log: [], btest: null, tests: [], blockDone: [] }; }
@@ -423,7 +447,7 @@ function startMode() {
   if (T.btest && T.btest.forced) return "block";
   return "night";
 }
-function setMode(m) { MODE = m; IDX = 0; render(); }
+function setMode(m) { if (m !== "dungeon") Sound.stopBGM(); MODE = m; IDX = 0; render(); }
 
 function render() {
   IDX = 0;
@@ -436,12 +460,14 @@ function render() {
   document.getElementById("tabReview").className = (MODE === "review") ? "on" : "";
   document.getElementById("tabPast").className = (MODE === "past") ? "on" : "";
   document.getElementById("tabTests").className = (MODE === "tests" || MODE === "block") ? "on" : "";
+  document.getElementById("tabDungeon").className = "dg" + (MODE === "dungeon" ? " on" : "");
   document.getElementById("tabTests").textContent = "まとめテスト" + ((T.btest && T.btest.forced) ? "（!）" : "");
   document.getElementById("tabReview").textContent =
     "復習" + (T.review.length > 0 ? "（" + T.review.length + "）" : "");
 
   if (MODE === "night") { LIST = cardsOfDay(T.day); renderNight(); }
   else if (MODE === "tests") { renderTests(); }
+  else if (MODE === "dungeon") { renderDungeon(); }
   else if (MODE === "block") { renderBlock(); }
   else if (MODE === "morning") {
     LIST = [];
@@ -728,6 +754,249 @@ function gradeB(ok, typed) {
   T.log.push({ id: c._id, day: studyDate(), ok: ok, bt: 1, typed: typed });
   T.btest.pos = IDX + 1;
   saveState(); IDX++; showBlockQuestion();
+}
+
+/* ============ ダンジョン（覚えた問題でゲーム感覚の復習） ============
+   B1〜B5 の5階。正解で敵にダメージ、不正解で自分がダメージ。
+   B5 のボスは「復習」にたまっている苦手な問題から優先して出す。
+   間違えた・自信がなかった問題は、その科目の「復習」に入る。        */
+var DG = null;   /* 挑戦中のダンジョン（アプリを閉じると消える） */
+var IMG_DIR = "";   /* 画像の置き場所（index.html と同じ場所なら空のまま） */
+var MONSTERS = [];
+for (var mi = 1; mi <= 18; mi++) MONSTERS.push("monster" + mi + ".png");
+var FLOORS = [
+  { n: "スライム",     e: "🟢", hp: 20, atk: 10, img: ["slime.png"] },
+  { n: "さまよう魔物", e: "🦇", hp: 30, atk: 12, img: MONSTERS },
+  { n: "ゴースト",     e: "👻", hp: 30, atk: 15, img: ["ghost.png"] },
+  { n: "ガイコツ",     e: "💀", hp: 40, atk: 15, img: ["skull.png"] },
+  { n: "魔王",         e: "🐉", hp: 60, atk: 20, img: ["boss.png"], boss: true }
+];
+function dgImgErr(el) {      /* 画像が置かれていないときは絵文字に切り替える */
+  var sp = document.createElement("span"); sp.textContent = el.getAttribute("data-e");
+  el.parentNode.replaceChild(sp, el);
+}
+
+/* ---- BGM・効果音（前のダンジョンと同じ。音楽ファイルは不要で、その場で音を作る） ---- */
+var Sound = {
+  ctx: null, timer: null,
+  on: function () { return !(S && S.dungeon && S.dungeon.bgm === false); },
+  init: function () {
+    try {
+      if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === "suspended") this.ctx.resume();
+    } catch (e) { this.ctx = null; }
+    return this.ctx;
+  },
+  playBGM: function (type) {
+    this.stopBGM();
+    if (!this.on() || !this.init()) return;
+    var melody, tempo;
+    if (type === "field") { melody = [392, 392, 440, 523, 587, 523, 440, 392, 392, 330, 392, 523]; tempo = 200; }
+    else if (type === "battle") { melody = [110, 110, 130, 110, 146, 110, 130, 110, 164, 110, 146, 110]; tempo = 100; }
+    else if (type === "boss") { melody = [65, 73, 82, 73, 65, 73, 82, 97]; tempo = 120; }
+    else return;
+    var self = this, i = 0;
+    var note = function () {
+      var c = self.ctx, o = c.createOscillator(), g = c.createGain();
+      o.connect(g); g.connect(c.destination);
+      o.type = (type === "field") ? "triangle" : "sawtooth";
+      o.frequency.value = melody[i];
+      g.gain.setValueAtTime(0.1, c.currentTime);
+      g.gain.linearRampToValueAtTime(0, c.currentTime + (tempo / 1000) * 0.9);
+      o.start(); o.stop(c.currentTime + tempo / 1000);
+      i = (i + 1) % melody.length;
+    };
+    note(); this.timer = setInterval(note, tempo);
+  },
+  stopBGM: function () { if (this.timer) clearInterval(this.timer); this.timer = null; },
+  se: function (type) {
+    if (!this.on() || !this.init()) return;
+    var c = this.ctx, now = c.currentTime;
+    if (type === "win") {
+      this.stopBGM();
+      [523, 659, 783, 1046].forEach(function (f, k) {
+        var o = c.createOscillator(), g = c.createGain();
+        o.connect(g); g.connect(c.destination); o.type = "square"; o.frequency.value = f;
+        g.gain.setValueAtTime(0.1, now + k * 0.1); g.gain.linearRampToValueAtTime(0, now + k * 0.1 + 0.3);
+        o.start(now + k * 0.1); o.stop(now + k * 0.1 + 0.3);
+      });
+      return;
+    }
+    var o = c.createOscillator(), g = c.createGain();
+    o.connect(g); g.connect(c.destination);
+    if (type === "decide") {
+      o.frequency.setValueAtTime(880, now); g.gain.setValueAtTime(0.1, now);
+      g.gain.exponentialRampToValueAtTime(0.01, now + 0.1); o.start(now); o.stop(now + 0.1);
+    } else if (type === "damage") {
+      o.type = "square"; o.frequency.setValueAtTime(150, now); o.frequency.linearRampToValueAtTime(50, now + 0.2);
+      g.gain.setValueAtTime(0.2, now); g.gain.linearRampToValueAtTime(0.01, now + 0.2); o.start(now); o.stop(now + 0.2);
+    }
+  }
+};
+function dgToggleBGM() {
+  var st = dgStats(); st.bgm = (st.bgm === false); saveState();
+  if (!st.bgm) Sound.stopBGM();
+  else Sound.playBGM(DG ? (FLOORS[DG.floor].boss ? "boss" : "battle") : "field");
+  var b = document.getElementById("dgBgmBtn"); if (b) b.textContent = st.bgm === false ? "🔇 BGM OFF" : "🔊 BGM ON";
+}
+function dgBgmBtn() {
+  return '<div class="dgtop"><button id="dgBgmBtn" class="dgbgm" onclick="dgToggleBGM()">' +
+         (dgStats().bgm === false ? "🔇 BGM OFF" : "🔊 BGM ON") + '</button></div>';
+}
+var PLAYER_MAX = 100;
+function dgTracks(scope) { return scope === "all" ? TRACKS.slice() : [S.track]; }
+function dgLearned(scope) {
+  /* 夜に覚え終えた日（day < その科目の今の日）だけを出す */
+  var ts = dgTracks(scope);
+  return ALL.filter(function (c) {
+    return ts.indexOf(c.track) >= 0 && S[c.track] && c.day < S[c.track].day;
+  });
+}
+function dgWeak(scope) {
+  var ts = dgTracks(scope), out = [];
+  for (var i = 0; i < ts.length; i++) {
+    var rv = (S[ts[i]] && S[ts[i]].review) || [];
+    for (var j = 0; j < rv.length; j++) { var c = byId(rv[j]); if (c && c.day < S[ts[i]].day) out.push(c); }
+  }
+  return out;
+}
+function dgStats() { if (!S.dungeon) S.dungeon = { best: 0, clears: 0, runs: 0 }; return S.dungeon; }
+function renderDungeon() {
+  if (DG) { dgShow(); return; }
+  var st = dgStats(), cur = dgLearned("cur").length, all = dgLearned("all").length;
+  Sound.playBGM("field");
+  var h = '<div class="dgbox">' + dgBgmBtn() + '<div class="dgenemy">🏰</div>' +
+    '<div class="dgname">記憶のダンジョン</div>' +
+    '<div style="font-size:14px;line-height:1.8;text-align:center">覚えた問題が敵になって出てきます。<br>' +
+    '正解で攻撃、まちがえるとダメージ。<br>地下5階のボスは、あなたの苦手な問題です。</div>' +
+    '<div class="dgmsg" style="text-align:center">最高到達：' + (st.best ? 'B' + st.best : 'まだ') +
+    '　クリア：' + st.clears + '回　挑戦：' + st.runs + '回</div></div>';
+  h += '<div class="dgpick">';
+  if (cur) h += '<button class="act" onclick="dgStart(\'cur\')">' + TRACK_NAME[S.track] + 'で挑む（' + cur + '問）</button>';
+  else h += '<div class="note">' + TRACK_NAME[S.track] + 'は、まだ覚え終えた問題がありません。夜の「おぼえる」を進めると挑めるようになります。</div>';
+  if (all > cur) h += '<button class="act sub" onclick="dgStart(\'all\')">全科目まぜて挑む（' + all + '問）</button>';
+  h += '</div>';
+  document.getElementById("app").innerHTML = h;
+}
+function dgStart(scope) {
+  var pool = shuffle(dgLearned(scope));
+  if (!pool.length) return;
+  dgStats().runs++; saveState();
+  DG = { scope: scope, floor: 0, php: PLAYER_MAX, ehp: FLOORS[0].hp, pool: pool, used: {},
+         ok: 0, total: 0, msg: FLOORS[0].n + 'があらわれた！', anim: "", cleared: false, cur: null,
+         imgs: FLOORS.map(function (f) { return f.img[Math.floor(Math.random() * f.img.length)]; }) };
+  Sound.playBGM("battle");
+  dgNext();
+}
+function dgPick() {
+  var f = FLOORS[DG.floor], c = null, i;
+  if (f.boss) {                         /* ボスは苦手な問題から */
+    var weak = shuffle(dgWeak(DG.scope));
+    for (i = 0; i < weak.length; i++) if (!DG.used[weak[i]._id]) { c = weak[i]; break; }
+  }
+  if (!c) for (i = 0; i < DG.pool.length; i++) if (!DG.used[DG.pool[i]._id]) { c = DG.pool[i]; break; }
+  if (!c) { DG.used = {}; c = DG.pool[Math.floor(Math.random() * DG.pool.length)]; }   /* 一周したら最初から */
+  DG.used[c._id] = 1;
+  return c;
+}
+function dgNext() {
+  var c = dgPick(), tf;
+  if (c.type === "choice" && c.choices && Math.random() < 0.3) {     /* たまに○×で攻めてくる */
+    if (Math.random() < 0.4) tf = c.correct;
+    else { var w = []; for (var k = 0; k < c.choices.length; k++) if (k !== c.correct) w.push(k); tf = w[Math.floor(Math.random() * w.length)]; }
+  }
+  DG.cur = { c: c, tf: tf };
+  dgShow();
+}
+function dgHeader() {
+  var f = FLOORS[DG.floor];
+  return '<div class="dgbox' + (DG.anim === "ouch" ? ' ouch' : '') + '">' + dgBgmBtn() +
+    '<div class="dgfloor"><span>地下' + (DG.floor + 1) + '階' + (f.boss ? '（ボス）' : '') + '</span>' +
+    '<span>正解 ' + DG.ok + ' / ' + DG.total + '</span></div>' +
+    '<div class="dgenemy' + (DG.anim === "shake" ? ' shake' : '') + '">' +
+      (DG.ehp > 0 ? '<img class="dgimg" src="' + IMG_DIR + DG.imgs[DG.floor] + '" data-e="' + f.e + '" onerror="dgImgErr(this)">' : '✨') + '</div>' +
+    '<div class="dgname">' + f.n + '</div>' +
+    '<div class="bar e"><div style="width:' + Math.max(0, DG.ehp * 100 / f.hp) + '%"></div></div>' +
+    '<div class="dglabel">あなたのHP ' + Math.max(0, DG.php) + ' / ' + PLAYER_MAX + '</div>' +
+    '<div class="bar p"><div style="width:' + Math.max(0, DG.php * 100 / PLAYER_MAX) + '%"></div></div>' +
+    '<div class="dgmsg">' + DG.msg + '</div></div>';
+}
+function dgShow() {
+  var app = document.getElementById("app"), c = DG.cur.c;
+  var h = dgHeader() + '<div class="greet">' + TRACK_NAME[c.track] + '　' + c.day + '日目の問題' +
+          (DG.cur.tf !== undefined ? '<span class="tag">○×</span>' : '') + '</div>';
+  DG.anim = "";
+  if (isQuiz(c)) { app.innerHTML = h + quizHtml(c, "d", DG.cur.tf); drawQuiz(); window.scrollTo(0, 0); return; }
+  h += '<div class="q">' + esc(c.question) + '</div>';
+  h += '<textarea id="dtyped" placeholder="思い出して書く"></textarea>';
+  h += '<button class="act" id="dBtn" onclick="revealD()">こたえを見る</button>';
+  h += '<div id="dans" class="hide"><div class="a" style="margin-top:22px">' + esc(answerText(c)) + '</div>';
+  if (c.explanation) h += '<div class="exp">' + esc(c.explanation) + '</div>';
+  h += easyHtml(c);
+  h += '<div class="two"><button class="act ng" onclick="gradeD(0,0)">× 言えなかった</button>';
+  h += '<button class="act ok" onclick="gradeD(1,0)">○ 言えた</button></div></div>';
+  app.innerHTML = h; window.scrollTo(0, 0);
+}
+function revealD() {
+  document.getElementById("dans").className = "";
+  document.getElementById("dBtn").className = "act hide";
+}
+function gradeD(ok, weak, typed) {
+  var c = DG.cur.c, f = FLOORS[DG.floor], R = S[c.track];
+  if (typed === undefined) { var el = document.getElementById("dtyped"); typed = el ? el.value : ""; }
+  DG.total++;
+  if (ok) {
+    var dmg = weak ? 6 : 10, crit = !weak && Math.random() < 0.25;
+    if (crit) dmg = 18;
+    DG.ok++; DG.ehp -= dmg; DG.anim = "shake"; Sound.se("decide");
+    DG.msg = (crit ? '会心の一撃！ ' : (weak ? 'かすった！ ' : '正解！ ')) + f.n + 'に ' + dmg + ' のダメージ！';
+  } else {
+    DG.php -= f.atk; DG.anim = "ouch"; Sound.se("damage");
+    DG.msg = 'まちがえた… ' + f.n + 'の攻撃！ ' + f.atk + ' のダメージを受けた。';
+  }
+  if ((!ok || weak) && R && R.review.indexOf(c._id) < 0) R.review.push(c._id);   /* 苦手は復習へ */
+  if (R) R.log.push({ id: c._id, day: studyDate(), ok: (ok && !weak) ? 1 : 0, dg: 1, typed: typed || "" });
+  saveState();
+  if (DG.php <= 0) { dgEnd(false); return; }
+  if (DG.ehp <= 0) { dgFloorClear(); return; }
+  dgNext();
+}
+function dgFloorClear() {
+  var f = FLOORS[DG.floor], st = dgStats();
+  if (DG.floor + 1 > st.best) { st.best = DG.floor + 1; saveState(); }
+  Sound.se("win");
+  if (f.boss) { dgEnd(true); return; }
+  setTimeout(function () { if (DG) Sound.playBGM("field"); }, 1500);
+  var heal = Math.min(20, PLAYER_MAX - DG.php);
+  DG.php += heal;
+  var nf = FLOORS[DG.floor + 1];
+  document.getElementById("app").innerHTML =
+    '<div class="dgbox"><div class="dgenemy">🪜</div><div class="dgname">' + f.n + 'をたおした！</div>' +
+    '<div class="dgmsg" style="text-align:center">' + (heal ? '休んで HP が ' + heal + ' 回復した。<br>' : '') +
+    '次は地下' + (DG.floor + 2) + '階' + (nf.boss ? '…ボスの気配がする。' : '。') + '</div></div>' +
+    '<button class="act" onclick="dgDown()">階段を下りる</button>';
+  window.scrollTo(0, 0);
+}
+function dgDown() {
+  DG.floor++; DG.ehp = FLOORS[DG.floor].hp; DG.anim = "";
+  Sound.playBGM(FLOORS[DG.floor].boss ? "boss" : "battle");
+  DG.msg = FLOORS[DG.floor].n + 'があらわれた！' + (FLOORS[DG.floor].boss ? '（苦手な問題で攻めてくる！）' : '');
+  dgNext();
+}
+function dgEnd(clear) {
+  var st = dgStats(), ok = DG.ok, total = DG.total, fl = DG.floor + 1;
+  if (clear) st.clears++; else { Sound.stopBGM(); Sound.se("damage"); }
+  saveState();
+  DG = null;
+  document.getElementById("app").innerHTML =
+    '<div class="dgbox"><div class="dgenemy">' + (clear ? '👑' : '🪦') + '</div>' +
+    '<div class="dgname">' + (clear ? 'ダンジョン制覇！' : '地下' + fl + '階でたおれてしまった…') + '</div>' +
+    '<div class="dgmsg" style="text-align:center">正解 ' + ok + ' / ' + total + ' 問<br>' +
+    'まちがえた問題と「なんとなく」の問題は「復習」に入りました。</div></div>' +
+    '<button class="act" onclick="setMode(\'dungeon\')">もう一度挑む</button>' +
+    '<button class="act sub" onclick="setMode(\'review\')">復習へ行く</button>';
+  document.getElementById("tabReview").textContent = "復習" + (T.review.length > 0 ? "（" + T.review.length + "）" : "");
+  window.scrollTo(0, 0);
 }
 
 /* ============ 復習（間違えた問題だけ・○で消える） ============ */
