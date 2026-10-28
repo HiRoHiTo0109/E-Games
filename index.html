@@ -778,7 +778,14 @@ function dgPickImgs() {
     return f.img[Math.floor(Math.random() * f.img.length)];
   });
 }
-function dgImgErr(el) {      /* 画像が置かれていないときは絵文字に切り替える */
+function dgImgErr(el) {
+  /* 「.png」で見つからなければ「.PNG」（大文字）でもう一度探す。
+     それでもなければ絵文字に切り替える */
+  var src = el.getAttribute("src");
+  if (!el.getAttribute("data-retry")) {
+    var alt = /\.png$/.test(src) ? src.replace(/\.png$/, ".PNG") : src.replace(/\.PNG$/, ".png");
+    if (alt !== src) { el.setAttribute("data-retry", "1"); el.setAttribute("src", alt); return; }
+  }
   var sp = document.createElement("span"); sp.textContent = el.getAttribute("data-e");
   el.parentNode.replaceChild(sp, el);
 }
