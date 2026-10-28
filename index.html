@@ -767,10 +767,17 @@ for (var mi = 1; mi <= 18; mi++) MONSTERS.push("monster" + mi + ".png");
 var FLOORS = [
   { n: "スライム",     e: "🟢", hp: 20, atk: 10, img: ["slime.png"] },
   { n: "さまよう魔物", e: "🦇", hp: 30, atk: 12, img: MONSTERS },
-  { n: "ゴースト",     e: "👻", hp: 30, atk: 15, img: ["ghost.png"] },
-  { n: "ガイコツ",     e: "💀", hp: 40, atk: 15, img: ["skull.png"] },
+  { n: "闇の魔物",     e: "👻", hp: 30, atk: 15, img: MONSTERS },
+  { n: "凶暴な魔物",   e: "💀", hp: 40, atk: 15, img: MONSTERS },
   { n: "魔王",         e: "🐉", hp: 60, atk: 20, img: ["boss.png"], boss: true }
 ];
+function dgPickImgs() {
+  var pool = shuffle(MONSTERS), k = 0;
+  return FLOORS.map(function (f) {
+    if (f.img === MONSTERS) return pool[k++];          /* 同じ挑戦の中で重ならない */
+    return f.img[Math.floor(Math.random() * f.img.length)];
+  });
+}
 function dgImgErr(el) {      /* 画像が置かれていないときは絵文字に切り替える */
   var sp = document.createElement("span"); sp.textContent = el.getAttribute("data-e");
   el.parentNode.replaceChild(sp, el);
@@ -884,7 +891,7 @@ function dgStart(scope) {
   dgStats().runs++; saveState();
   DG = { scope: scope, floor: 0, php: PLAYER_MAX, ehp: FLOORS[0].hp, pool: pool, used: {},
          ok: 0, total: 0, msg: FLOORS[0].n + 'があらわれた！', anim: "", cleared: false, cur: null,
-         imgs: FLOORS.map(function (f) { return f.img[Math.floor(Math.random() * f.img.length)]; }) };
+         imgs: dgPickImgs() };
   Sound.playBGM("battle");
   dgNext();
 }
